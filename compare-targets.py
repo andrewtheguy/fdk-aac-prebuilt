@@ -8,8 +8,16 @@ described as fixed-point integer code throughout, but on x86 `fixmul.h` and
 `sqrtFixp`, `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with x86-specific
 implementations. aarch64 uses the generic C ones. Different algorithms round differently, the
 encoder makes slightly different quantisation decisions, and the bitstream differs — by
-design, upstream, not a miscompile. (It is not floating point: `-ffp-contract=off` on the
-x86-64-v3 build changes not one digest.)
+design, upstream, not a miscompile.
+
+Two things it is emphatically not, both worth knowing before anyone proposes turning an
+optimization off to make the numbers agree. It is not floating point: `-ffp-contract=off` on
+the x86-64-v3 build changes not one digest. And it is not the CPU floors, which the full
+matrix settles — `windows-x86_64-msvc` built by MSVC at `/arch:AVX2` is byte-identical to
+`linux-x86_64` built by GCC at `-march=x86-64-v3`, and `macos-arm64` at `-mcpu=apple-m1` is
+byte-identical to `linux-aarch64` at no floor at all, while the same GCC across the two
+architectures differs. The boundary is the architecture, so lowering a floor would cost speed
+and change nothing.
 
 So the targets are compared at the strength they actually agree at, which is three different
 strengths and is why this is a script rather than a `diff`:
