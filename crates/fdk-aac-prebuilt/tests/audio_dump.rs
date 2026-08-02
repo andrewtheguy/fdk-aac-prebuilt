@@ -162,12 +162,19 @@ fn dump_every_signal_class() {
 
 /// The two HE profiles against plain AAC-LC at a bitrate low enough for the difference to be
 /// the point — this is SBR being audible rather than SBR being a granule size in a table.
+///
+/// The **sweep**, and that choice is the whole exercise. SBR restores a top octave that AAC-LC
+/// spends its bits away from, so demonstrating it needs a signal that has a top octave: this
+/// dump first used `chord`, which is four partials between 220 and 440 Hz and measures −91 dB
+/// above 13 kHz *before encoding*. All three profiles came back identical at −91 dB, which
+/// looked like SBR doing nothing and was really a source with nothing for it to do. The sweep
+/// runs to a quarter of the sample rate and measures −23.2 dB in the same band.
 #[test]
 #[ignore = "writes WAV files to listen to; run with --ignored"]
 fn dump_the_he_profiles() {
     let dir = output_dir();
     let samples = RATE as usize * 3;
-    let source = common::chord(RATE, samples).samples;
+    let source = common::sweep(RATE, samples).samples;
     // Stereo, because HE-AAC v2's Parametric Stereo has nothing to do with a mono input.
     let stereo: Vec<i16> = source.iter().flat_map(|&s| [s, s]).collect();
     write_wav(&dir.join("profiles-source.wav"), RATE, 2, &stereo);
