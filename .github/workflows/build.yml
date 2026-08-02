@@ -38,6 +38,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       targets: ${{ steps.matrix.outputs.targets }}
+      count: ${{ steps.matrix.outputs.count }}
     steps:
       - uses: actions/checkout@v5
 
@@ -71,6 +72,10 @@ jobs:
           targets="$(jq -c --arg g "$GROUP" '[.[] | select($g == "all" or .group == $g)]' <<<"$all")"
           echo "$targets" | jq -r '.[].target' | sed 's/^/  /'
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          # The count, so the comparison job can require exactly this many to report and can
+          # skip itself when the matrix holds only one. Without it that job has no way to tell
+          # "narrowed on purpose" from "three targets died", and it must fail the second.
+          echo "count=$(jq 'length' <<<"$targets")" >> "$GITHUB_OUTPUT"
 
   build:
     needs: plan
@@ -124,69 +129,61 @@ jobs:
           path: dist/${{ matrix.target }}
           if-no-files-found: error
 
-      # The digests the e2e binary produced, uploaded separately so the job below can
-      # collect all four without unpacking four archive trees.
+      # What the e2e binary measured, uploaded separately so the comparison job can collect
+      # every target's without unpacking four archive trees: the bitstream digests, the
+      # structural facts, and the decoded audio.
+      - name: Collect what this target produced
+        shell: bash
+        run: cp digests.txt e2e-out/
       - uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.target }}
-          path: digests.txt
+          name: e2e-${{ matrix.target }}
+          path: e2e-out
           if-no-files-found: error
 
-  # Do all four targets encode the same bytes?
+  # Do the targets agree — and at what strength?
   #
-  # This is the assertion that replaces the SIMD-symbol check libopus-prebuilt does in its
-  # build script, and it is a stronger one. fdk-aac is fixed-point integer code throughout,
-  # so the same input *should* produce the same bitstream on Apple silicon, on x86_64, on
-  # aarch64 and under MSVC — there is no float reassociation to excuse a difference. If two
-  # targets disagree, one of them is miscompiled, and that is worth stopping a release for.
+  # This replaces a `bit-exact` job that required all four to encode byte-identical
+  # bitstreams. That assertion was false, and the first CI run on this repository disproved
+  # it: the two arm64 targets matched each other exactly while linux-x86_64 differed on every
+  # configuration. Not a miscompile. On x86, fdk-aac's `fixmul.h` and `fixpoint_math.h`
+  # include `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h`, which replace `sqrtFixp`,
+  # `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with x86-specific
+  # implementations; aarch64 uses the generic C ones. Different algorithms round differently,
+  # so the encoder makes slightly different quantisation decisions. Upstream ships it that way
+  # on purpose.
   #
-  # Comparing four live runners rather than a checked-in expected digest: a stored value can
-  # only ever record the answer from whichever machine last regenerated it, which is the
-  # thing under test. It would also need regenerating on every fdk-aac bump.
+  # Nor is it floating point, which is the obvious suspect and is innocent: rebuilding
+  # linux-x86_64 with `-ffp-contract=off` changes not one digest.
   #
-  # `if: always()` and the count check together: with fail-fast off, a partial matrix would
-  # otherwise let this job "pass" by comparing one target with itself.
-  bit-exact:
-    needs: build
-    if: always()
+  # So the four are compared at the three strengths they actually agree at — structure
+  # exactly, size within a tolerance, decoded audio as an SNR and a correlation, and digests
+  # byte-for-byte but only between targets of the same architecture. compare-targets.py has
+  # the measured numbers and the reasoning behind each floor.
+  #
+  # `if: always()` with an explicit expected count, rather than a `>= 2` guard: with fail-fast
+  # off, a partial matrix would otherwise let the survivors "agree" among themselves. The
+  # count comes from `plan`, so a narrowed dispatch skips this job instead of failing it —
+  # which is what a single-target matrix has to do, having nothing to compare against.
+  compare:
+    needs: [plan, build]
+    if: always() && fromJSON(needs.plan.outputs.count) >= 2
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v4
         with:
-          pattern: digests-*
-          path: digests
+          pattern: e2e-*
+          path: e2e
 
-      - name: Every target must produce identical bitstreams
+      # The artifacts arrive as `e2e/e2e-<target>/`; the script wants one directory per target
+      # named for it, so the prefix comes off here rather than being taught to the script.
+      - name: Name each directory for its target
         run: |
-          shopt -s nullglob
-          files=(digests/digests-*/digests.txt)
-          echo "collected ${#files[@]} target(s)"
-          [ "${#files[@]}" -ge 2 ] || {
-            echo "::error::only ${#files[@]} digest file(s) — a target failed before it could"
-            echo "::error::report, so there is nothing to compare. Check the build matrix."
-            exit 1
-          }
+          cd e2e
+          for dir in e2e-*; do mv "$dir" "${dir#e2e-}"; done
+          ls -1
 
-          reference="${files[0]}"
-          echo "--- $(basename "$(dirname "$reference")")"
-          cat "$reference"
-
-          status=0
-          for file in "${files[@]:1}"; do
-            name="$(basename "$(dirname "$file")")"
-            if diff -u "$reference" "$file" >/dev/null; then
-              echo "ok   $name matches"
-            else
-              echo "::error::$name encoded different bytes from $(basename "$(dirname "$reference")")"
-              diff -u "$reference" "$file" || true
-              status=1
-            fi
-          done
-
-          [ "$status" = 0 ] || {
-            echo "::error::fdk-aac is fixed-point and should be bit-identical across targets."
-            echo "::error::A mismatch means one of these archives is miscompiled — do not"
-            echo "::error::release it. See the note in crates/fdk-aac-e2e/src/main.rs."
-            exit 1
-          }
-          echo "all ${#files[@]} targets produced byte-identical bitstreams"
+      - name: The targets must agree
+        run: python3 compare-targets.py e2e --expected ${{ needs.plan.outputs.count }}

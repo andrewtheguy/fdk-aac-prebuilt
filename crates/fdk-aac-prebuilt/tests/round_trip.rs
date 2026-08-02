@@ -7,11 +7,12 @@
 //! here and still not reproduce a sine wave.
 //!
 //! Nothing is compared bit-exactly against a stored fixture, and that is deliberate. AAC is
-//! lossy, so no measure can be an equality test; and while fdk-aac is fixed-point and
-//! *should* produce identical bitstreams everywhere, asserting that belongs in the pipeline,
-//! where four real targets can be compared against each other, rather than in a checked-in
-//! digest that has to be regenerated whenever the pinned version moves. See the `bit-exact`
-//! job in `.github/workflows/build.yml`.
+//! lossy, so no measure can be an equality test; and how far two *targets* may differ is a
+//! question for the pipeline, where real archives can be compared against each other, rather
+//! than for a checked-in digest that has to be regenerated whenever the pinned version moves.
+//! See the `compare` job in `.github/workflows/build.yml` — which is also where it is
+//! recorded that fdk-aac is *not* bit-identical across architectures, because it swaps in
+//! x86-specific fixed-point primitives that round differently from the generic C ones.
 //!
 //! So: measures, with floors that travel with the signal. The floors sit well below what is
 //! actually observed — the numbers each test prints are the real ones — because a threshold
