@@ -156,14 +156,28 @@ integer code throughout, from which it follows that every target should encode i
 bytes. The first pipeline run disproved it: `macos-arm64` and `linux-aarch64` matched each
 other exactly, and `linux-x86_64` differed on all seven configurations.
 
-It is not a miscompile, and it is not floating point. On x86, `fixmul.h` and
-`fixpoint_math.h` include `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h`, which replace
-`sqrtFixp`, `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with x86-specific
-implementations. aarch64 uses the generic C versions, the `arm/` headers holding only 32-bit
-ARM inline assembly. Different algorithms for the same function round differently, the encoder
-makes marginally different quantisation decisions, and the bitstream differs. Rebuilding
-`linux-x86_64` with `-ffp-contract=off` changes not one digest, which rules the obvious
-suspect out.
+It is not a miscompile, not floating point, and **not the optimization flags**. On x86,
+`fixmul.h` and `fixpoint_math.h` include `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h`,
+which replace `sqrtFixp`, `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with
+x86-specific implementations. aarch64 uses the generic C versions, the `arm/` headers holding
+only 32-bit ARM inline assembly. Different algorithms for the same function round differently,
+the encoder makes marginally different quantisation decisions, and the bitstream differs.
+
+The full matrix says this cleanly, and it is worth reading carefully before anyone proposes
+weakening a `-march` to make the numbers line up:
+
+```
+arm64:   macos-arm64         ≡ linux-aarch64      (byte-identical)
+x86_64:  windows-x86_64-msvc ≡ linux-x86_64       (byte-identical)
+         arm64 ≠ x86_64
+```
+
+The boundary is the **architecture**, not the toolchain. MSVC with `/arch:AVX2` and GCC with
+`-march=x86-64-v3` emit the same bitstream as each other despite sharing no optimizer; Apple
+clang with `-mcpu=apple-m1` and GCC with no floor at all likewise. Meanwhile the *same* GCC on
+two architectures disagrees. So the CPU floors cannot be what causes the difference, and
+dropping them would cost speed while changing nothing. Rebuilding `linux-x86_64` with
+`-ffp-contract=off` also changes not one digest, ruling out the other obvious suspect.
 
 So `compare-targets.py` asserts each property at the strength it actually holds:
 
@@ -182,10 +196,12 @@ top octave from parameters rather than coding its waveform — at 29.4 dB it sti
 0.999423 with an RMS ratio of 1.00067, which is the same audio and not the same samples.
 
 The digest comparison is scoped to one architecture because that is where it holds, and there
-it holds strongly: the same seven digests come out of a Docker container on an Apple-silicon
-Mac and out of a GitHub `ubuntu-24.04-arm` runner, whose GCC versions differ enough to produce
-measurably different libraries (274 against 282 NEON instructions, different
-`sha256(library)`).
+it holds strongly — across compilers, across CPU floors, and across machines. CI shows MSVC
+and GCC agreeing byte-for-byte on x86_64 and Apple clang and GCC agreeing on arm64. Locally,
+the same seven arm64 digests come out of a Docker container on an Apple-silicon Mac and out of
+a GitHub `ubuntu-24.04-arm` runner, whose GCC versions differ enough to produce measurably
+different libraries (274 against 282 NEON instructions, different `sha256(library)`). Same
+architecture, same bitstream, whatever built it.
 
 Live runners rather than a checked-in expected value throughout: a stored digest could only
 record the answer from whichever machine last regenerated it, which is the thing under test.

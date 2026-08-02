@@ -43,9 +43,12 @@
 //! round differently, the encoder makes slightly different quantisation decisions, and the
 //! bitstream differs. By design, in upstream, and not a miscompile.
 //!
-//! It is not floating point that does this, which is worth recording because it is the
-//! obvious suspect and it is innocent: `-ffp-contract=off` on the x86-64-v3 build changes not
-//! one digest.
+//! Neither floating point nor the CPU floors do this, which is worth recording because both
+//! are the obvious suspects and both are innocent. `-ffp-contract=off` on the x86-64-v3 build
+//! changes not one digest. And the four targets split strictly by architecture rather than by
+//! toolchain: MSVC at `/arch:AVX2` matches GCC at `-march=x86-64-v3` byte for byte, Apple
+//! clang at `-mcpu=apple-m1` matches GCC at no floor at all, and it is the same GCC across
+//! two architectures that disagrees. Lowering a floor would cost speed and fix nothing.
 //!
 //! Nothing is compared against a *stored* value. A checked-in expected digest would have to be
 //! regenerated every time the pinned fdk-aac moves, and only ever from whichever machine
