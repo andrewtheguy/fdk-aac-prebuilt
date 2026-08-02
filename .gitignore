@@ -13,6 +13,11 @@ crates/fdk-aac-prebuilt-sys/prebuilt/
 target/
 Cargo.lock
 
+# Per-checkout notes for Claude Code: which machine has Docker, how to reach it, what its
+# shell does differently. All of it is true of one developer's setup rather than of the
+# project; anything that holds for everyone belongs in a committed CLAUDE.md instead.
+CLAUDE.local.md
+
 # Written by fdk-aac-e2e when it runs. The pipeline uploads it per target and the
 # `bit-exact` job compares the four; a copy from whichever machine last ran the binary is
 # not a fact about the repository.
