@@ -4,10 +4,47 @@ A WAV goes in, AAC happens to it, a WAV comes out — so you can listen to the d
 
 ```sh
 cargo run --release                                  # synthesises a 10 s clip first
+cargo run --release -- --music                       # a four-bar progression instead
 cargo run --release -- some.wav
 cargo run --release -- some.wav --bitrates 32,64,128
 cargo run --release -- some.wav --profiles           # AAC-LC vs HE-AAC vs HE-AAC v2
 ```
+
+## `--music` — the clip to actually listen to
+
+The default synthesised clip is a **drone**: its bass and chord never stop and never
+re-articulate, so in ten seconds the only transients are the hi-hats. That makes it a fair
+stress test and a poor listening test, because steady tones are the easiest thing AAC codes
+and their artefacts are the least like the ones anybody hears in practice.
+
+`--music` synthesises a four-bar Am–F–C–G progression at 96 bpm instead — plucked notes with
+real attacks and decays, a bass line on beats 1 and 3, and hi-hats on every eighth. Ported
+from the sibling [`libopus-prebuilt`](https://github.com/andrewtheguy/libopus-prebuilt) demo,
+which had the better clip.
+
+```
+    kbps    frames    bytes    ratio    actual   SNR dB   delay (reported/measured)
+      32       471    40989    46.8x     32.8k     18.0     3792 / 3792
+      64       471    80858    23.7x     64.7k     20.9     3792 / 3792
+     128       471   160790    11.9x    128.6k     22.2     3792 / 3792
+```
+
+**The SNR column is lower than the drone's and that is the point, not a regression.** 22 dB
+at 128 kbps against the drone's 34 dB is a waveform measure being handed transients and noise,
+which is exactly the content it scores worst and the ear notices least. Listen to
+`music-128k-diff.wav`: the error is concentrated in the hi-hats and the note attacks.
+
+It is also the better `--profiles` input, because the hi-hats give it a top octave that the
+drone barely has:
+
+| file | mean level above 13 kHz |
+|---|---|
+| `music-original.wav` | −39.6 dB |
+| `music-aaclc.aac` (32 kbps) | **−84.3 dB** — gone |
+| `music-heaac.aac` (32 kbps) | **−49.6 dB** — SBR put it back |
+| `music-heaacv2.aac` (32 kbps) | −46.9 dB |
+
+Nearly 35 dB between the first two, at one bitrate, from an independent decoder.
 
 ```
 fdk-aac:  2.0.3 (encoder lib (4, 0, 1))
