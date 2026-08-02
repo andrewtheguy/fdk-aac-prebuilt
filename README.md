@@ -196,12 +196,12 @@ top octave from parameters rather than coding its waveform — at 29.4 dB it sti
 0.999423 with an RMS ratio of 1.00067, which is the same audio and not the same samples.
 
 The digest comparison is scoped to one architecture because that is where it holds, and there
-it holds strongly — across compilers, across CPU floors, and across machines. CI shows MSVC
-and GCC agreeing byte-for-byte on x86_64 and Apple clang and GCC agreeing on arm64. Locally,
-the same seven arm64 digests come out of a Docker container on an Apple-silicon Mac and out of
-a GitHub `ubuntu-24.04-arm` runner, whose GCC versions differ enough to produce measurably
-different libraries (274 against 282 NEON instructions, different `sha256(library)`). Same
-architecture, same bitstream, whatever built it.
+it holds strongly — across compilers, across CPU floors, and across libraries that are not
+themselves identical. On x86_64, MSVC's archive and GCC's are byte-identical in what they
+encode while sharing no optimizer; on arm64, Apple clang's and GCC's are, one built to
+`-mcpu=apple-m1` and the other to no floor at all. The four runners are four different real
+machines, which is why this is the evidence worth quoting: the archives differ, the bitstreams
+do not.
 
 Live runners rather than a checked-in expected value throughout: a stored digest could only
 record the answer from whichever machine last regenerated it, which is the thing under test.

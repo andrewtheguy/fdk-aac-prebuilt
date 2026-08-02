@@ -18,11 +18,11 @@
 //! them together under one assertion gets the answer wrong.
 //!
 //! `digests.txt` — a SHA-256 of each bitstream. Equal across targets **of the same
-//! architecture**, and that is where the comparison is scoped. It holds strongly: the same
-//! seven digests come out of a Docker container on an Apple-silicon Mac and out of a GitHub
-//! `ubuntu-24.04-arm` runner, built by two different GCC versions producing two different
-//! libraries (274 versus 282 NEON instructions, different `sha256(library)`). Same
-//! architecture, same bytes, regardless of toolchain.
+//! architecture**, and that is where the comparison is scoped. It holds strongly, on four
+//! separate machines: MSVC's x86_64 archive and GCC's encode identical bytes while sharing no
+//! optimizer, and Apple clang's arm64 archive and GCC's do the same, one built to
+//! `-mcpu=apple-m1` and the other to no floor at all. Same architecture, same bytes,
+//! regardless of what compiled it.
 //!
 //! `e2e-out/structure.txt` — granule, decoded sample rate, decoded channel count, access-unit
 //! count and decoded length. These are exact across *every* target, architecture included:

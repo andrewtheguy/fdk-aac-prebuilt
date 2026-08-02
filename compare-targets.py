@@ -36,9 +36,9 @@ strengths and is why this is a script rather than a `diff`:
               archives produce must be the same to within a threshold.
 
   digests     byte-identical, but only between targets of the same architecture. That holds
-              strongly — the same seven digests come from a Docker container on an
-              Apple-silicon Mac and from a GitHub `ubuntu-24.04-arm` runner, built by two
-              different GCC versions into two measurably different libraries.
+              strongly across four separate machines: MSVC's x86_64 archive and GCC's encode
+              identical bytes while sharing no optimizer, and Apple clang's arm64 archive and
+              GCC's do the same, one built to -mcpu=apple-m1 and the other to no floor at all.
 
 Standard library only, so a CI runner needs nothing installed.
 """
