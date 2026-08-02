@@ -225,6 +225,15 @@ def main():
     # ---------------------------------------------------------------- size, within tolerance
     print(f"bitstream size — spread must stay under {args.size_tolerance:.1%}")
     for label in reference_structure:
+        # A target missing this configuration has already been reported above, by the
+        # structure comparison, which records the failure and carries on so the rest of the
+        # report still gets produced. Indexing it here regardless raised a KeyError and
+        # replaced that whole report with a traceback — so the label is skipped instead, and
+        # the error the reader needs is the one already printed.
+        absent = [t for t in targets if label not in structures[t]]
+        if absent:
+            print(f"  --  {label:<26} skipped, missing from {', '.join(absent)}")
+            continue
         sizes = {t: structures[t][label]["bytes"] for t in targets}
         low, high = min(sizes.values()), max(sizes.values())
         spread = (high - low) / low if low else 0.0
@@ -241,23 +250,42 @@ def main():
     # ---------------------------------------------------------------- digests, per architecture
     print("bitstream digests — byte-identical within an architecture")
     by_architecture = {}
-    for target in targets:
-        by_architecture.setdefault(ARCHITECTURE.get(target, target), []).append(target)
-    for architecture, members in sorted(by_architecture.items()):
-        if len(members) < 2:
-            print(f"  {architecture}: only {members[0]} — nothing to compare against")
-            continue
-        head = members[0]
-        expected = (args.root / head / "digests.txt").read_text()
-        for other in members[1:]:
-            actual = (args.root / other / "digests.txt").read_text()
-            if actual == expected:
-                print(f"  ok  {architecture}: {other} matches {head}")
-            else:
-                ok = fail(
-                    f"{other} and {head} are both {architecture} and must encode identical "
-                    f"bytes, but their digests differ"
-                )
+    unmapped = [t for t in targets if t not in ARCHITECTURE]
+    if unmapped:
+        # Refused rather than defaulted. Falling back to the target's own name put each
+        # unknown target in an architecture of one, which then printed "nothing to compare
+        # against" and skipped it — a new target would silently lose this check entirely, and
+        # the log would look like it had been considered. ARCHITECTURE is a short table; a
+        # target being added to the matrix belongs in it.
+        ok = fail(
+            f"no architecture recorded for {', '.join(sorted(unmapped))} — add it to "
+            f"ARCHITECTURE in this script, which is what scopes the digest comparison"
+        )
+    else:
+        for target in targets:
+            by_architecture.setdefault(ARCHITECTURE[target], []).append(target)
+        for architecture, members in sorted(by_architecture.items()):
+            if len(members) < 2:
+                print(f"  {architecture}: only {members[0]} — nothing to compare against")
+                continue
+            head = members[0]
+            # Read through the same failure path as the audio section below: a missing or
+            # unreadable digests.txt is a finding to report, not a traceback to decipher.
+            try:
+                digests = {
+                    t: (args.root / t / "digests.txt").read_text() for t in members
+                }
+            except OSError as e:
+                ok = fail(f"{architecture}: cannot read digests.txt: {e}")
+                continue
+            for other in members[1:]:
+                if digests[other] == digests[head]:
+                    print(f"  ok  {architecture}: {other} matches {head}")
+                else:
+                    ok = fail(
+                        f"{other} and {head} are both {architecture} and must encode "
+                        f"identical bytes, but their digests differ"
+                    )
     print()
 
     # ---------------------------------------------------------------- audio, as an SNR

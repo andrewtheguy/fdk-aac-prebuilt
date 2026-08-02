@@ -234,29 +234,53 @@ entry_points='aacEncOpen aacEncEncode aacEncInfo aacEncGetLibInfo aacEncoder_Set
 case "$target" in
   windows-*)
     # `nm` is not on a Windows runner's PATH and `lib /list` needs an MSVC environment this
-    # script does not set up. A COFF archive, though, stores its symbol table as plain
-    # NUL-terminated ASCII, so the entry points can be read straight out of the file — which
-    # asks the same question as the `nm` branch below, about the same artifact.
+    # script does not set up. So the archive's own index is read instead.
     #
-    # What this replaced: a glob for each module directory in the `.obj` paths. That was a
-    # weaker proxy — "did cmake emit objects for this module" rather than "is the function in
-    # the library" — and it was also simply wrong. With no `-G`, Windows gets the Visual
-    # Studio generator, which flattens objects into `fdk-aac.dir/Release/` with no source
-    # directory in the path, so `-path "*libAACenc*"` matched nothing and *every* Windows
-    # build failed here with "the build is missing a module" on a library that was fine.
+    # A COFF archive's **first linker member** is exactly that index: the symbols the archive
+    # *defines*. That is the same question `nm --defined-only` asks in the branch below, and
+    # the reason it has to be this rather than a scan of the file's printable strings — which
+    # is what this did first. A string scan also matches *undefined* externals, and on this
+    # archive `memcpy` gets 14 such hits while being imported from the CRT rather than defined
+    # here. An entry point that had gone missing but was still referenced would have passed.
     #
-    # x64 is the reason the names can be matched literally: MSVC decorates `__cdecl` symbols
-    # with a leading underscore on x86 but not on x64, and these are plain C entry points.
-    symbols="$(LC_ALL=C tr -c '[:print:]' '\n' <"$out/lib/$lib_name")"
+    # Layout, from the PE/COFF specification: the 8-byte `!<arch>\n` magic, a 60-byte member
+    # header whose name is `/` and whose 10-byte size field sits at offset 48, then the member
+    # — a 4-byte **big-endian** count, that many 4-byte offsets, then that many NUL-terminated
+    # names. Read with `dd` rather than piped through `head`, because `head` exiting early
+    # takes the writer down with SIGPIPE and `set -o pipefail` then reports 141; see the note
+    # in the other branch, which is the same trap.
+    lib_path="$out/lib/$lib_name"
+    [ "$(dd if="$lib_path" bs=1 count=8 2>/dev/null)" = '!<arch>' ] || {
+      echo "$lib_name is not an archive — its magic is not '!<arch>'" >&2
+      exit 1
+    }
+    member_name="$(dd if="$lib_path" bs=1 skip=8 count=16 2>/dev/null)"
+    [ "${member_name%%[[:space:]]*}" = '/' ] || {
+      echo "$lib_name has no first linker member — cannot list its defined symbols" >&2
+      exit 1
+    }
+    member_size="$(dd if="$lib_path" bs=1 skip=56 count=10 2>/dev/null | tr -d '[:space:]')"
+    symbol_count=$((16#$(od -An -tx1 -N4 -j 68 "$lib_path" | tr -d ' \n')))
+    # The names run from just past the offset array to the end of the member.
+    names_at=$((72 + symbol_count * 4))
+    names_len=$((member_size - 4 - symbol_count * 4))
+    if [ "$symbol_count" -le 0 ] || [ "$names_len" -le 0 ]; then
+      echo "$lib_name's linker member lists no symbols — this is not a complete fdk-aac" >&2
+      exit 1
+    fi
+    symbols="$(dd if="$lib_path" bs=1 skip="$names_at" count="$names_len" 2>/dev/null |
+      LC_ALL=C tr '\0' '\n')"
+
+    # x64 is why the names match literally: MSVC decorates `__cdecl` symbols with a leading
+    # underscore on x86 but not on x64, and these are plain C entry points.
     for symbol in $entry_points; do
-      # `-x` so a name only ever matches a symbol-table entry standing on its own, rather
-      # than as a substring of some longer string that happens to be in the file.
       grep -qxF "$symbol" <<<"$symbols" || {
-        echo "$symbol is not in $lib_name — this is not a complete fdk-aac" >&2
+        echo "$symbol is not defined in $lib_name — this is not a complete fdk-aac" >&2
         exit 1
       }
     done
-    echo "   $(printf '%s\n' "$entry_points" | wc -w | tr -d ' ') entry points present in the archive"
+    echo "   $(printf '%s\n' "$entry_points" | wc -w | tr -d ' ') entry points defined" \
+         "(of $symbol_count in the archive index)"
     ;;
   *)
     symbols="$(nm --defined-only "$out/lib/$lib_name" 2>/dev/null || true)"
@@ -359,22 +383,33 @@ case "$target" in
       if [ "${instructions:-0}" -lt 1000 ]; then
         avx_evidence="not measured (objdump disassembled only ${instructions:-0} instructions)"
       else
+        # Matched on the *architecture* rather than on the exact target, so that adding
+        # `macos-x86_64` to the list above cannot silently count NEON mnemonics in an x86
+        # disassembly. The `*)` arm says so rather than guessing, for the same reason the
+        # instruction-count test above exists: a number nobody measured is worse than none.
+        #
+        # `[[:space:]]` rather than `\s` throughout — `\s` is a GNU extension that POSIX ERE
+        # does not define, and one of these two patterns runs against BSD grep on the macOS
+        # runner.
         case "$target" in
-          linux-x86_64)
-            count="$(grep -ciE '\s(vp[a-z]+|vmov[a-z]*|vfmadd[0-9a-z]*)[[:space:].]' \
+          *-x86_64 | *-x86_64-*)
+            count="$(grep -ciE '[[:space:]](vp[a-z]+|vmov[a-z]*|vfmadd[0-9a-z]*)[[:space:].]' \
               <<<"$disassembly" || true)"
             avx_evidence="${count:-0} AVX/AVX2 instructions"
             ;;
-          *)
+          *-arm64 | *-aarch64)
             # A dot *or* whitespace after the mnemonic, because the two objdumps disagree on
             # how to print a vector arrangement: Apple's llvm-objdump writes `ld1.4s` and
             # `smlal.4s`, GNU objdump on Linux writes `ld1 {v0.4s}, [x0]`. Requiring
             # whitespace reported `0 NEON instructions` for macos-arm64 — built with
             # `-mcpu=apple-m1` — while linux-aarch64, built with no floor at all, reported
             # 274. The archive was fine; the pattern was measuring one toolchain's syntax.
-            count="$(grep -ciE '\s(ld[0-9]|st[0-9]|fmla|smlal|sqdmulh)[[:space:].]' \
+            count="$(grep -ciE '[[:space:]](ld[0-9]|st[0-9]|fmla|smlal|sqdmulh)[[:space:].]' \
               <<<"$disassembly" || true)"
             avx_evidence="${count:-0} NEON instructions"
+            ;;
+          *)
+            avx_evidence='not measured (no instruction pattern for this architecture)'
             ;;
         esac
       fi
