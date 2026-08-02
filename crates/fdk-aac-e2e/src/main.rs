@@ -12,22 +12,48 @@
 //! - Windows works at all, which is the one target that cannot be built or run anywhere
 //!   else in this repository.
 //!
-//! # The digests
+//! # What this writes, and what compares it
 //!
-//! fdk-aac is fixed-point integer code throughout. Unlike Opus — whose float paths reorder
-//! additions differently per SIMD kernel, so its own end-to-end binary can only ever
-//! *measure* — AAC encoding here is deterministic integer arithmetic, and the same input
-//! should produce the same bytes on every target.
+//! Three artifacts, because the four targets agree at three different strengths and running
+//! them together under one assertion gets the answer wrong.
 //!
-//! So this prints a SHA-256 per configuration, and the pipeline's `bit-exact` job collects
-//! them from all four targets and requires them to be equal. That is a far stronger claim
-//! than a threshold: it says the macOS, Linux x86_64, Linux aarch64 and Windows archives are
-//! the same encoder, not merely four encoders that each sound acceptable.
+//! `digests.txt` — a SHA-256 of each bitstream. Equal across targets **of the same
+//! architecture**, and that is where the comparison is scoped. It holds strongly, on four
+//! separate machines: MSVC's x86_64 archive and GCC's encode identical bytes while sharing no
+//! optimizer, and Apple clang's arm64 archive and GCC's do the same, one built to
+//! `-mcpu=apple-m1` and the other to no floor at all. Same architecture, same bytes,
+//! regardless of what compiled it.
 //!
-//! Nothing is compared against a *stored* digest. A checked-in expected value would have to
-//! be regenerated every time the pinned fdk-aac moves, and only ever from whichever machine
+//! `e2e-out/structure.txt` — granule, decoded sample rate, decoded channel count, access-unit
+//! count and decoded length. These are exact across *every* target, architecture included:
+//! they follow from the format and the input, not from arithmetic.
+//!
+//! `e2e-out/audio/<label>-source.wav` and `-decoded.wav` — what went into the encoder and
+//! what came out of the decoder, for the pipeline to measure cross-architecture agreement as
+//! an SNR, and for a person to listen to.
+//!
+//! # Why not one digest comparison across all four
+//!
+//! Because fdk-aac is not the uniform fixed-point integer code it is usually described as,
+//! and this repository asserted that it was until CI disproved it. On x86, `fixmul.h` and
+//! `fixpoint_math.h` include `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h`, which replace
+//! `sqrtFixp`, `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with x86-specific
+//! implementations. aarch64 uses the generic C ones — the `arm/` headers hold 32-bit ARM
+//! inline assembly that is inactive on aarch64. Different algorithms for the same function
+//! round differently, the encoder makes slightly different quantisation decisions, and the
+//! bitstream differs. By design, in upstream, and not a miscompile.
+//!
+//! Neither floating point nor the CPU floors do this, which is worth recording because both
+//! are the obvious suspects and both are innocent. `-ffp-contract=off` on the x86-64-v3 build
+//! changes not one digest. And the four targets split strictly by architecture rather than by
+//! toolchain: MSVC at `/arch:AVX2` matches GCC at `-march=x86-64-v3` byte for byte, Apple
+//! clang at `-mcpu=apple-m1` matches GCC at no floor at all, and it is the same GCC across
+//! two architectures that disagrees. Lowering a floor would cost speed and fix nothing.
+//!
+//! Nothing is compared against a *stored* value. A checked-in expected digest would have to be
+//! regenerated every time the pinned fdk-aac moves, and only ever from whichever machine
 //! happened to run the script — so it would encode "the answer from that machine", which is
-//! the thing under test. Comparing four live runners to each other has no such blind spot.
+//! the thing under test. Comparing live runners to each other has no such blind spot.
 //!
 //! Every check reports, and the exit code is the verdict. Failures do not stop the run,
 //! because in CI the whole report is more useful than the first line of it.
@@ -35,6 +61,7 @@
 mod metrics;
 mod sha256;
 mod signals;
+mod wav;
 
 use fdk_aac::dec::{Decoder, Transport as DecTransport};
 use fdk_aac::enc::{
@@ -48,8 +75,12 @@ struct Report {
     passed: usize,
     failed: Vec<String>,
     /// `label sha256` per configuration, written to digests.txt for the pipeline to compare
-    /// across targets.
+    /// between targets of the same architecture.
     digests: Vec<(String, String)>,
+    /// One line per configuration of facts that follow from the format rather than from
+    /// arithmetic, so every target must produce this file identically — architecture
+    /// included. Written to e2e-out/structure.txt for the pipeline to diff.
+    structure: Vec<String>,
 }
 
 impl Report {
@@ -158,7 +189,8 @@ fn main() -> ExitCode {
         return leak_deliberately();
     }
 
-    let mut report = Report { passed: 0, failed: Vec::new(), digests: Vec::new() };
+    let mut report =
+        Report { passed: 0, failed: Vec::new(), digests: Vec::new(), structure: Vec::new() };
 
     report.check("sha256 agrees with the published vectors", sha256::self_test());
     check_library_identity(&mut report);
@@ -174,6 +206,7 @@ fn main() -> ExitCode {
     }
 
     write_digests(&report);
+    write_structure(&report);
 
     println!("\n{} checks passed", report.passed);
     if report.failed.is_empty() {
@@ -421,6 +454,41 @@ fn run_config(report: &mut Report, config: &Config) {
     let ratio = metrics::rms(&left[lag..lag + n]) / metrics::rms(&reference[..n]);
     report
         .check(&format!("{}: energy ratio {ratio:.3}", config.label), (0.3..3.0).contains(&ratio));
+
+    // The facts every target must agree on exactly. Deliberately not the bitstream length:
+    // that is arithmetic, it moves with the quantisation decisions the x86 primitives make
+    // differently, and putting it here would fail a comparison that is meant to be exact.
+    // The pipeline compares sizes separately, with a tolerance.
+    report.structure.push(format!(
+        "{} granule={frame} rate={} channels={} access_units={} decoded_samples={} bytes={}",
+        config.label,
+        si.sampleRate,
+        si.numChannels,
+        access_units.len(),
+        decoded.len(),
+        stream.len(),
+    ));
+    // Both halves, so the pair can be listened to as well as measured: `-source` is exactly
+    // what went into the encoder, `-decoded` exactly what came out of the decoder. The
+    // pipeline's SNR job reads the second; the first is what makes the second interpretable.
+    let dir = std::path::Path::new("e2e-out").join("audio");
+    write_audio(&dir.join(format!("{}-source.wav", config.label)), config.rate, channels, &pcm);
+    write_audio(
+        &dir.join(format!("{}-decoded.wav", config.label)),
+        si.sampleRate as u32,
+        si.numChannels as usize,
+        &decoded,
+    );
+}
+
+/// Write one WAV, reporting rather than failing if it cannot.
+///
+/// Not a check: a read-only working directory should not fail the binary's real job, and the
+/// jobs that consume these files notice a missing artifact on their own.
+fn write_audio(path: &std::path::Path, rate: u32, channels: usize, samples: &[i16]) {
+    if let Err(e) = wav::write(path, rate, channels as u16, samples) {
+        println!("        could not write {}: {e}", path.display());
+    }
 }
 
 /// Create and destroy a lot of codecs and require the process not to grow without bound.
@@ -508,6 +576,24 @@ fn write_digests(report: &Report) {
         // Not a failure: a read-only working directory should not fail the binary's real
         // job, and the bit-exact job notices a missing artifact on its own.
         Err(e) => println!("\ncould not write digests.txt: {e}"),
+    }
+}
+
+/// Write `e2e-out/structure.txt` — the facts the pipeline requires every target to agree on.
+///
+/// A missing line is as meaningful as a wrong one: `run_config` returns early on any failure,
+/// so a target that could not encode a configuration writes a shorter file, and the diff the
+/// pipeline runs reports that rather than passing on the lines that did survive.
+fn write_structure(report: &Report) {
+    let path = std::path::Path::new("e2e-out").join("structure.txt");
+    if let Err(e) = std::fs::create_dir_all("e2e-out") {
+        println!("could not create e2e-out: {e}");
+        return;
+    }
+    let text = report.structure.iter().map(|l| format!("{l}\n")).collect::<String>();
+    match std::fs::write(&path, &text) {
+        Ok(()) => println!("wrote {} ({} configurations)", path.display(), report.structure.len()),
+        Err(e) => println!("could not write {}: {e}", path.display()),
     }
 }
 

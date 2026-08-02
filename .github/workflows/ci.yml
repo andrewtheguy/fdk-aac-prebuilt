@@ -42,6 +42,10 @@ jobs:
           shellcheck -x build.sh sync-prebuilt.sh test-docker.sh check-static.sh \
                         crates/fdk-aac-prebuilt-sys/gen-bindings.sh \
                         crates/fdk-aac-prebuilt-sys/gen-version.sh
+      # The comparison script decides whether a release happens, so a syntax error in it must
+      # not wait until four archives have been built to surface.
+      - name: compare-targets.py parses
+        run: python3 -m py_compile compare-targets.py
 
   # A separate job on macOS for one reason: its `/bin/bash` is 3.2, from 2007, and that is
   # what a stock Mac runs. shellcheck accepts bash-5-only constructs happily, and
@@ -105,6 +109,13 @@ jobs:
   #
   # Calling build.yml rather than repeating it means CI, the manual test loop and the release
   # all exercise the same code, with no CI-only build to drift.
+  #
+  # One target means build.yml's `compare` job skips itself, which is correct and is the
+  # reason that job takes an expected count from `plan` rather than guarding on "at least two
+  # digest files". The earlier guard could not tell a deliberately narrowed matrix from a
+  # matrix whose other targets had died, so it failed both — and since this job has always
+  # passed `x86_64`, CI could never go green. Cross-target agreement is asserted where there
+  # is more than one target to compare: a manual `build.yml` run, and every release.
   archives:
     uses: ./.github/workflows/build.yml
     with:

@@ -34,6 +34,7 @@ use fdk_aac::dec::{Decoder, Transport as DecTransport};
 use fdk_aac::enc::{
     AudioObjectType, BitRate, ChannelMode, Encoder, EncoderParams, Param, Transport,
 };
+use std::f64::consts::TAU;
 use std::path::{Path, PathBuf};
 use wav::Wav;
 
@@ -57,6 +58,7 @@ fn run() -> Result<(), String> {
     let mut input: Option<PathBuf> = None;
     let mut bitrates = vec![32, 64, 128];
     let mut profiles = false;
+    let mut music = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -69,12 +71,16 @@ fn run() -> Result<(), String> {
                     .collect::<Result<_, _>>()?;
             }
             "--profiles" => profiles = true,
+            "--music" => music = true,
             "-h" | "--help" => {
                 println!(
-                    "usage: wav-demo [input.wav] [--bitrates 32,64,128] [--profiles]\n\
+                    "usage: wav-demo [input.wav] [--bitrates 32,64,128] [--profiles] [--music]\n\
                      \n\
                      --profiles  encode at one low bitrate as AAC-LC, HE-AAC and HE-AAC v2,\n\
-                     \x20           which is where SBR and Parametric Stereo earn their place."
+                     \x20           which is where SBR and Parametric Stereo earn their place.\n\
+                     --music     synthesise a four-bar chord progression instead of the\n\
+                     \x20           default drone — plucked notes, a bass line and hi-hats,\n\
+                     \x20           which is a far better clip to judge artefacts by ear on."
                 );
                 return Ok(());
             }
@@ -91,6 +97,10 @@ fn run() -> Result<(), String> {
         Some(p) => {
             let stem = p.file_stem().unwrap_or_default().to_string_lossy().into_owned();
             (wav::read(p)?, stem)
+        }
+        None if music => {
+            println!("no input given — synthesising the music clip\n");
+            (music_clip(), "music".to_string())
         }
         None => {
             println!("no input given — synthesising a demo clip\n");
@@ -412,7 +422,7 @@ fn demo_clip() -> Wav {
     let mut left = Vec::with_capacity(n);
     let mut right = Vec::with_capacity(n);
     let mut noise_state = 0.0f64;
-    let mut rng: u64 = 0x1234_5678_9ABC_DEF0;
+    let mut rng = Rng(0x1234_5678_9ABC_DEF0);
 
     for i in 0..n {
         let t = i as f64 / RATE as f64;
@@ -429,8 +439,7 @@ fn demo_clip() -> Wav {
 
         // Hi-hats: filtered noise in short bursts, twice a second. Transients are what a
         // codec's block-switching decisions are for, and where a bad one is easiest to hear.
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let white = ((rng >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0;
+        let white = rng.next_f64();
         noise_state = noise_state * 0.35 + white * 0.65;
         let beat = (t * 2.0).fract();
         let envelope = if beat < 0.08 { (1.0 - beat / 0.08).powi(3) } else { 0.0 };
@@ -451,4 +460,117 @@ fn demo_clip() -> Wav {
         samples.push((right[i] * 20000.0).clamp(-32768.0, 32767.0) as i16);
     }
     Wav { rate: RATE, channels: 2, samples }
+}
+
+/// A four-bar chord progression, for `--music`. Ported from the sibling `libopus-prebuilt`
+/// demo, which is the better thing to judge a codec by ear on.
+///
+/// `demo_clip` above is a *drone*: its bass and chord never stop and never re-articulate, so
+/// the only transients in ten seconds are the hi-hats. That is a reasonable stress test and a
+/// poor listening test — steady tones are the easiest thing AAC codes, and artefacts on them
+/// are the least like the ones anybody actually hears. This one has note attacks, decays,
+/// harmonic movement and a rhythm, which is where a low bitrate audibly falls apart.
+///
+/// 48 kHz rather than the drone's 44.1: `--profiles` runs at 32 kbps, dual-rate SBR then
+/// puts the AAC core at 24 kHz, and both are in the MPEG-4 rate table so nothing resamples.
+fn music_clip() -> Wav {
+    const RATE: u32 = 48_000;
+    let bpm = 96.0;
+    let beat = 60.0 / bpm;
+    let bars = 4;
+    let total = (beat * 4.0 * bars as f64 * RATE as f64) as usize;
+
+    // Am - F - C - G, as semitone offsets from A2 (110 Hz). A progression rather than one
+    // chord so the encoder's masking decisions have to keep moving.
+    let chords: [[f64; 3]; 4] =
+        [[0.0, 3.0, 7.0], [-4.0, 0.0, 5.0], [3.0, 7.0, 12.0], [-2.0, 2.0, 7.0]];
+    let hz = |semi: f64| 110.0 * 2.0f64.powf(semi / 12.0);
+
+    let mut left = vec![0.0f64; total];
+    let mut right = vec![0.0f64; total];
+    let mut rng = Rng(0xC0FF_EE00);
+
+    for bar in 0..bars {
+        let chord = chords[bar % chords.len()];
+        let bar_start = (beat * 4.0 * bar as f64 * RATE as f64) as usize;
+
+        // The chord: one pluck per beat, its voices spread across the stereo field.
+        for b in 0..4 {
+            let start = bar_start + (beat * b as f64 * RATE as f64) as usize;
+            for (v, &semi) in chord.iter().enumerate() {
+                let f = hz(semi + 12.0);
+                let pan = v as f64 / (chord.len() - 1) as f64; // 0 = left, 1 = right
+                for i in 0..(beat * 1.6 * RATE as f64) as usize {
+                    let t = i as f64 / RATE as f64;
+                    let env = (-t * 4.5).exp();
+                    // Two partials, so it is not a bare sine.
+                    let s = ((t * f * TAU).sin() * 0.7 + (t * f * 2.0 * TAU).sin() * 0.3)
+                        * env
+                        * 3200.0;
+                    if let Some(n) = (start + i < total).then_some(start + i) {
+                        left[n] += s * (1.0 - pan * 0.7);
+                        right[n] += s * (0.3 + pan * 0.7);
+                    }
+                }
+            }
+        }
+
+        // Bass: the root, on beats 1 and 3. Centred, which matters — panning it would put
+        // the mono downmix into partial cancellation, and Parametric Stereo cannot recover
+        // what cancelled before it saw it. See the note in `demo_clip`.
+        for b in [0usize, 2] {
+            let start = bar_start + (beat * b as f64 * RATE as f64) as usize;
+            let f = hz(chord[0]);
+            for i in 0..(beat * 1.4 * RATE as f64) as usize {
+                let t = i as f64 / RATE as f64;
+                let s = (t * f * TAU).sin() * (-t * 3.0).exp() * 5000.0;
+                if let Some(n) = (start + i < total).then_some(start + i) {
+                    left[n] += s;
+                    right[n] += s;
+                }
+            }
+        }
+
+        // Hi-hat on every eighth: highpassed noise in a short burst. Noise with a sharp
+        // attack is the content a codec has the hardest time with and the easiest place to
+        // hear it fail — pre-echo, if the block switching is not doing its job.
+        for e in 0..8 {
+            let start = bar_start + (beat * 0.5 * e as f64 * RATE as f64) as usize;
+            let mut hp = 0.0;
+            let mut prev = 0.0;
+            for i in 0..(0.06 * RATE as f64) as usize {
+                let t = i as f64 / RATE as f64;
+                let white = rng.next_f64();
+                hp = 0.7 * (hp + white - prev);
+                prev = white;
+                let s = hp * (-t * 60.0).exp() * 2600.0;
+                if let Some(n) = (start + i < total).then_some(start + i) {
+                    left[n] += s * 0.9;
+                    right[n] += s * 1.1;
+                }
+            }
+        }
+    }
+
+    // Normalised to 85% of full scale. Deliberately not hotter: a near-0 dBFS input puts the
+    // decoder's PCM limiter to work, and then the measurements above are of the limiter.
+    let peak = left.iter().chain(right.iter()).fold(0.0f64, |m, v| m.max(v.abs())).max(1.0);
+    let gain = 32767.0 * 0.85 / peak;
+    let mut samples = Vec::with_capacity(total * 2);
+    for i in 0..total {
+        samples.push((left[i] * gain).clamp(-32768.0, 32767.0) as i16);
+        samples.push((right[i] * gain).clamp(-32768.0, 32767.0) as i16);
+    }
+    Wav { rate: RATE, channels: 2, samples }
+}
+
+/// Deterministic, so both synthesised clips are the same clips on every machine and in every
+/// run. Shared by `demo_clip` and `music_clip`, which had the same LCG written out twice.
+struct Rng(u64);
+
+impl Rng {
+    fn next_f64(&mut self) -> f64 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((self.0 >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+    }
 }

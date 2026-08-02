@@ -101,8 +101,8 @@ jobs:
             ${{ steps.tag.outputs.is_prerelease == 'true' && '--prerelease' || '' }}
 
   # Every target, built and tested by the same workflow the manual test loop uses. Not a copy
-  # of it — the same file. Its `bit-exact` job is part of this gate: four archives that do not
-  # agree on the bytes they encode do not get published.
+  # of it — the same file. Its `compare` job is part of this gate: four archives that do not
+  # agree on the audio they produce do not get published.
   archives:
     needs: prepare
     uses: ./.github/workflows/build.yml

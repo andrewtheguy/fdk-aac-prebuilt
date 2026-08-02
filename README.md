@@ -127,8 +127,8 @@ A project that needs to run below the floor should build its own and point
 `FDK_AAC_PREBUILT_DIR` at the prefix.
 
 Two things this does *not* do, both on purpose: `-march=native` (the artifact runs on machines
-other than the builder) and any fast-math flag (it would change a fixed-point codec's
-arithmetic, and the bit-exactness check below would stop meaning anything).
+other than the builder) and any fast-math flag (it would change the codec's arithmetic, and
+the cross-target comparison below would stop meaning anything).
 
 ### Reproducibility
 
@@ -147,16 +147,63 @@ Note also that the `.tar.gz` around an archive is *not* reproducible — gzip st
 into its header. That is why `sha256(library)` in each MANIFEST is the checksum worth
 comparing between releases, and the tarball's is only good for catching a bad download.
 
-### Bit-exactness
+### How far the four targets agree
 
-fdk-aac is fixed-point integer code throughout, so unlike Opus its output *should* be
-identical on every target — there is no float reassociation to excuse a difference. The
-pipeline asserts it: `fdk-aac-e2e` encodes seven configurations from an integer-only signal
-and writes a SHA-256 per configuration, each of the four targets uploads its `digests.txt`,
-and a `bit-exact` job requires all four to be equal. A mismatch fails the build and blocks the
-release.
+Not bit-for-bit, and finding out why is the most interesting thing CI has done here.
 
-Four live runners rather than a checked-in expected digest: a stored value could only ever
+fdk-aac is usually described — including by an earlier version of this file — as fixed-point
+integer code throughout, from which it follows that every target should encode identical
+bytes. The first pipeline run disproved it: `macos-arm64` and `linux-aarch64` matched each
+other exactly, and `linux-x86_64` differed on all seven configurations.
+
+It is not a miscompile, not floating point, and **not the optimization flags**. On x86,
+`fixmul.h` and `fixpoint_math.h` include `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h`,
+which replace `sqrtFixp`, `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with
+x86-specific implementations. aarch64 uses the generic C versions, the `arm/` headers holding
+only 32-bit ARM inline assembly. Different algorithms for the same function round differently,
+the encoder makes marginally different quantisation decisions, and the bitstream differs.
+
+The full matrix says this cleanly, and it is worth reading carefully before anyone proposes
+weakening a `-march` to make the numbers line up:
+
+```
+arm64:   macos-arm64         ≡ linux-aarch64      (byte-identical)
+x86_64:  windows-x86_64-msvc ≡ linux-x86_64       (byte-identical)
+         arm64 ≠ x86_64
+```
+
+The boundary is the **architecture**, not the toolchain. MSVC with `/arch:AVX2` and GCC with
+`-march=x86-64-v3` emit the same bitstream as each other despite sharing no optimizer; Apple
+clang with `-mcpu=apple-m1` and GCC with no floor at all likewise. Meanwhile the *same* GCC on
+two architectures disagrees. So the CPU floors cannot be what causes the difference, and
+dropping them would cost speed while changing nothing. Rebuilding `linux-x86_64` with
+`-ffp-contract=off` also changes not one digest, ruling out the other obvious suspect.
+
+So `compare-targets.py` asserts each property at the strength it actually holds:
+
+| property | across | how equal |
+|---|---|---|
+| granule, decoded rate, channels, access units, decoded length | every target | exactly |
+| encoded size | every target | within 2% (measured spread: under 0.031%) |
+| decoded audio | every target | SNR above a per-configuration floor, correlation ≥ 0.995 |
+| bitstream SHA-256 | targets of the same architecture | byte-identical |
+
+The audio floors are per-configuration for the same reason `common::Signal` carries a
+`corr_floor` per signal class: measured x86_64-against-aarch64 agreement runs from 29 dB to
+79 dB depending on whether SBR is running, and one global number would either pass a broken
+AAC-LC path or fail a working HE-AAC one. HE-AAC is the low one because SBR synthesises the
+top octave from parameters rather than coding its waveform — at 29.4 dB it still correlates at
+0.999423 with an RMS ratio of 1.00067, which is the same audio and not the same samples.
+
+The digest comparison is scoped to one architecture because that is where it holds, and there
+it holds strongly — across compilers, across CPU floors, and across libraries that are not
+themselves identical. On x86_64, MSVC's archive and GCC's are byte-identical in what they
+encode while sharing no optimizer; on arm64, Apple clang's and GCC's are, one built to
+`-mcpu=apple-m1` and the other to no floor at all. The four runners are four different real
+machines, which is why this is the evidence worth quoting: the archives differ, the bitstreams
+do not.
+
+Live runners rather than a checked-in expected value throughout: a stored digest could only
 record the answer from whichever machine last regenerated it, which is the thing under test.
 
 ## Building and testing it
