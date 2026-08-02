@@ -19,7 +19,7 @@
 mod common;
 
 use common::{best_lag, to_f64, write_wav, Signal};
-use fdk_aac::dec::{Decoder, Transport as DecTransport};
+use fdk_aac::dec::{Decoder, DecoderError, Transport as DecTransport};
 use fdk_aac::enc::{
     AudioObjectType, BitRate, ChannelMode, Encoder, EncoderParams, Transport as EncTransport,
 };
@@ -76,7 +76,17 @@ fn round_trip(
     decoder.fill(&stream).unwrap();
     let mut decoded = Vec::new();
     let mut buffer = vec![0i16; 16384];
-    while decoder.decode_frame(&mut buffer).is_ok() {
+    loop {
+        // The error is looked at rather than discarded. Running out of input is how this loop
+        // is *supposed* to end, so that one stays silent; anything else means the WAV about to
+        // be written is truncated, and a short file with no explanation is the worst outcome
+        // for something whose whole purpose is to be listened to.
+        if let Err(e) = decoder.decode_frame(&mut buffer) {
+            if e != DecoderError::NOT_ENOUGH_BITS {
+                println!("    decode stopped after {} samples: {e}", decoded.len());
+            }
+            break;
+        }
         let n = decoder.decoded_frame_size();
         if n == 0 {
             break;

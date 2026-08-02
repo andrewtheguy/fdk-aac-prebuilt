@@ -422,7 +422,7 @@ fn demo_clip() -> Wav {
     let mut left = Vec::with_capacity(n);
     let mut right = Vec::with_capacity(n);
     let mut noise_state = 0.0f64;
-    let mut rng: u64 = 0x1234_5678_9ABC_DEF0;
+    let mut rng = Rng(0x1234_5678_9ABC_DEF0);
 
     for i in 0..n {
         let t = i as f64 / RATE as f64;
@@ -439,8 +439,7 @@ fn demo_clip() -> Wav {
 
         // Hi-hats: filtered noise in short bursts, twice a second. Transients are what a
         // codec's block-switching decisions are for, and where a bad one is easiest to hear.
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let white = ((rng >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0;
+        let white = rng.next_f64();
         noise_state = noise_state * 0.35 + white * 0.65;
         let beat = (t * 2.0).fract();
         let envelope = if beat < 0.08 { (1.0 - beat / 0.08).powi(3) } else { 0.0 };
@@ -565,7 +564,8 @@ fn music_clip() -> Wav {
     Wav { rate: RATE, channels: 2, samples }
 }
 
-/// Deterministic, so the clip is the same clip on every machine and in every run.
+/// Deterministic, so both synthesised clips are the same clips on every machine and in every
+/// run. Shared by `demo_clip` and `music_clip`, which had the same LCG written out twice.
 struct Rng(u64);
 
 impl Rng {
