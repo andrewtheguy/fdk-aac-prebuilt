@@ -1,0 +1,9 @@
+# One config for the whole workspace, at the root, because rustfmt resolves upwards from
+# each file and a per-crate copy would let the three crates drift into different styles.
+max_width = 100
+
+# Stop rustfmt breaking a call across four lines because it exceeded 80 columns while the
+# limit above says 100. The default `use_small_heuristics` applies a set of much narrower
+# sub-limits — 60 for function calls, 80 for structs — which in practice means `max_width`
+# describes almost nothing. "Max" makes the one number mean what it says.
+use_small_heuristics = "Max"

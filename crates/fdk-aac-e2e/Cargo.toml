@@ -1,0 +1,16 @@
+[package]
+name = "fdk-aac-e2e"
+version.workspace = true
+edition = "2021"
+description = "End-to-end check: a real binary that encodes and decodes AAC"
+publish = false
+
+[dependencies]
+# Written exactly the way a consuming project writes it, rename and all — so this
+# dependency line is itself part of what the pipeline tests. A project would use
+# `git = "…", tag = "…"` here instead of `path`.
+fdk-aac = { package = "fdk-aac-prebuilt", path = "../fdk-aac-prebuilt" }
+# Directly, as well as through the wrapper: `aacEncGetLibInfo` is the call that says which
+# library actually got linked, and it has no safe equivalent — there is nothing for a safe
+# wrapper to wrap in "tell me your version".
+fdk-aac-sys = { package = "fdk-aac-prebuilt-sys", path = "../fdk-aac-prebuilt-sys" }

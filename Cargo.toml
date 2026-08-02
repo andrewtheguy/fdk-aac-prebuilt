@@ -1,0 +1,17 @@
+# The Rust half of this repository: a replacement for `fdk-aac` + `fdk-aac-sys` that links
+# the prebuilt archives built by ./build.sh instead of compiling ~170 C++ files with the
+# `cc` crate on every clean build.
+#
+# Two crates rather than one, for the same reason every -sys pair is split: the FFI and the
+# link flags are ours, the safe API descends from somebody else's crate and keeps their
+# names. The third member is not a library at all — it is a consumer, built and run by the
+# pipeline on every target, because linking an archive into a binary that executes is a
+# different claim from compiling a test.
+[workspace]
+members = ["crates/fdk-aac-prebuilt-sys", "crates/fdk-aac-prebuilt", "crates/fdk-aac-e2e"]
+resolver = "2"
+
+[workspace.package]
+# Not fdk-aac's version — that is in fdk-aac.env, and a consumer pins this by git tag
+# anyway. This number moves when the *crates* change shape.
+version = "0.1.0"

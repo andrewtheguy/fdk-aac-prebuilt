@@ -1,0 +1,192 @@
+name: Build fdk-aac
+
+# Build every archive and test it. This workflow never publishes — releasing is release.yml,
+# which calls this one and then does the publishing part. Two triggers instead of one, so
+# that "does it build and pass" can be asked at any time without anybody being committed to
+# a release by asking.
+#
+# `workflow_dispatch` is the test loop, and Windows is why it matters: it is the one target
+# that cannot be built or tested anywhere else here — Docker covers Linux
+# (`./test-docker.sh`) and a Mac covers itself — so `targets: windows` is how the MSVC
+# archive gets exercised at all.
+#
+# `workflow_call` is release.yml. A failure anywhere in here — a build, a test, the e2e
+# binary, `check-static.sh`, the cross-target digest comparison — fails the caller's job and
+# the release never happens.
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "which targets to build and test"
+        type: choice
+        default: all
+        options: [all, windows, x86_64, arm64]
+  workflow_call:
+    inputs:
+      targets:
+        description: "which targets to build and test"
+        type: string
+        default: all
+
+# Read-only. The token that can create a release belongs to the job that creates one, and
+# that job is in the other file.
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      targets: ${{ steps.matrix.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # That the committed headers are the pinned fdk-aac's, that src/bindings.rs is what
+      # those headers say, and that src/version.rs is what the pinned sources say. Cheap,
+      # and it runs before four compilers do.
+      #
+      # bindgen is installed rather than assumed: `--check` regenerates, and it refuses to
+      # run under a version other than the one the committed file was made with, because
+      # bindgen's output is not stable across its own releases.
+      - name: Install the pinned bindgen
+        run: |
+          sudo apt-get update && sudo apt-get install -y libclang-dev
+          cargo install bindgen-cli --version 0.72.1 --locked
+      - run: ./sync-prebuilt.sh --check
+
+      # The matrix, narrowed here as *data* rather than by a job-level `if`. Two reasons,
+      # one hard and one practical: a job-level condition cannot reference `matrix` at all —
+      # GitHub rejects the workflow outright — and filtering before the fan-out means a
+      # `targets: windows` dispatch starts one runner instead of four.
+      - id: matrix
+        env:
+          GROUP: ${{ inputs.targets || 'all' }}
+        run: |
+          all='[
+            {"target":"macos-arm64",         "runs-on":"macos-latest",    "group":"arm64"},
+            {"target":"linux-x86_64",        "runs-on":"ubuntu-24.04",    "group":"x86_64"},
+            {"target":"linux-aarch64",       "runs-on":"ubuntu-24.04-arm","group":"arm64"},
+            {"target":"windows-x86_64-msvc", "runs-on":"windows-latest",  "group":"windows"}
+          ]'
+          targets="$(jq -c --arg g "$GROUP" '[.[] | select($g == "all" or .group == $g)]' <<<"$all")"
+          echo "$targets" | jq -r '.[].target' | sed 's/^/  /'
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    strategy:
+      # No fail-fast: one target failing to configure is exactly the case where the other
+      # three logs are the useful comparison.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.targets) }}
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # bash on the Windows runner too, so one script covers every target. cmake is
+      # preinstalled on all three images.
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        run: ./build.sh ${{ matrix.target }}
+
+      # The half of the artifact the archive alone does not cover: whether Rust can *link*
+      # it. That is what has broken before — a CRT mismatch, a `.lib` under a name nobody
+      # expected, an `.a` for the wrong ABI — and none of it shows up in a successful cmake
+      # run. `--offline`, after sync-prebuilt.sh, also demonstrates the claim consumers care
+      # about: once the archive exists, no build needs a network.
+      - name: Link and test against it
+        shell: bash
+        run: |
+          ./sync-prebuilt.sh
+          cargo test --offline --workspace
+
+      # The end-to-end leg: a release binary that is a *consumer* of the crate, executed on
+      # the runner's own processor. This is where the CPU floor stops being a claim in a
+      # MANIFEST — an AVX2 archive that cannot run fails here — and it is the only place
+      # Windows gets exercised at all, since neither Docker nor a Mac can do it.
+      - name: End to end — encode and decode in a real binary
+        shell: bash
+        run: |
+          cargo build --offline --release --workspace
+          bin=target/release/fdk-aac-e2e
+          [ -f "$bin" ] || bin="$bin.exe"
+          "$bin"
+          ./check-static.sh "$bin"
+
+      - name: Show what was built
+        shell: bash
+        run: cat dist/${{ matrix.target }}/MANIFEST
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fdk-aac-${{ matrix.target }}
+          path: dist/${{ matrix.target }}
+          if-no-files-found: error
+
+      # The digests the e2e binary produced, uploaded separately so the job below can
+      # collect all four without unpacking four archive trees.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.target }}
+          path: digests.txt
+          if-no-files-found: error
+
+  # Do all four targets encode the same bytes?
+  #
+  # This is the assertion that replaces the SIMD-symbol check libopus-prebuilt does in its
+  # build script, and it is a stronger one. fdk-aac is fixed-point integer code throughout,
+  # so the same input *should* produce the same bitstream on Apple silicon, on x86_64, on
+  # aarch64 and under MSVC — there is no float reassociation to excuse a difference. If two
+  # targets disagree, one of them is miscompiled, and that is worth stopping a release for.
+  #
+  # Comparing four live runners rather than a checked-in expected digest: a stored value can
+  # only ever record the answer from whichever machine last regenerated it, which is the
+  # thing under test. It would also need regenerating on every fdk-aac bump.
+  #
+  # `if: always()` and the count check together: with fail-fast off, a partial matrix would
+  # otherwise let this job "pass" by comparing one target with itself.
+  bit-exact:
+    needs: build
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digests-*
+          path: digests
+
+      - name: Every target must produce identical bitstreams
+        run: |
+          shopt -s nullglob
+          files=(digests/digests-*/digests.txt)
+          echo "collected ${#files[@]} target(s)"
+          [ "${#files[@]}" -ge 2 ] || {
+            echo "::error::only ${#files[@]} digest file(s) — a target failed before it could"
+            echo "::error::report, so there is nothing to compare. Check the build matrix."
+            exit 1
+          }
+
+          reference="${files[0]}"
+          echo "--- $(basename "$(dirname "$reference")")"
+          cat "$reference"
+
+          status=0
+          for file in "${files[@]:1}"; do
+            name="$(basename "$(dirname "$file")")"
+            if diff -u "$reference" "$file" >/dev/null; then
+              echo "ok   $name matches"
+            else
+              echo "::error::$name encoded different bytes from $(basename "$(dirname "$reference")")"
+              diff -u "$reference" "$file" || true
+              status=1
+            fi
+          done
+
+          [ "$status" = 0 ] || {
+            echo "::error::fdk-aac is fixed-point and should be bit-identical across targets."
+            echo "::error::A mismatch means one of these archives is miscompiled — do not"
+            echo "::error::release it. See the note in crates/fdk-aac-e2e/src/main.rs."
+            exit 1
+          }
+          echo "all ${#files[@]} targets produced byte-identical bitstreams"

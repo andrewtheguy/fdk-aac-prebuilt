@@ -1,0 +1,25 @@
+[package]
+name = "wav-demo"
+version = "0.1.0"
+edition = "2021"
+
+# An empty [workspace] table detaches this from the repository's workspace, so it resolves
+# its own dependencies and cannot affect the crates that get released. It is here to be a
+# *consumer*: for a real project this line reads `git = "…", tag = "…"`, and the path form
+# below is used only so the demo builds in a fresh clone that predates the first release.
+[workspace]
+
+[dependencies]
+# What a consuming project writes, rename and all:
+#
+#   fdk-aac = { package = "fdk-aac-prebuilt", git = "https://github.com/andrewtheguy/fdk-aac-prebuilt", tag = "v2.0.3-…" }
+#
+# DO NOT bump such a tag on every release. This directory is a sample, not a test: nothing in
+# CI builds it, an older tag still resolves, and `build.rs` fetches archives from the
+# repository's *latest* release regardless of which tag the crate source came from. Keeping a
+# pin current here would mean a commit after every release whose only content is a tag, which
+# is exactly the maintenance that `releases/latest/download/…` was chosen to avoid.
+fdk-aac = { package = "fdk-aac-prebuilt", path = "../crates/fdk-aac-prebuilt" }
+
+[profile.release]
+opt-level = 2

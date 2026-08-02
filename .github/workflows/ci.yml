@@ -1,0 +1,249 @@
+name: CI
+
+# On every push and pull request, unlike build.yml and release.yml, which are manual.
+#
+# The distinction is what changes commit to commit. The *archives* change only when
+# fdk-aac.env or build.sh does — a deliberate act, followed by a deliberate `build.yml` run
+# — so rebuilding four of them on every push would be four runners proving that a pinned
+# tarball is still pinned. The *Rust crates, the generated files and the shell scripts*
+# change constantly, and nothing would check them unless somebody remembered to press a
+# button.
+#
+# So: one x86_64 pair rather than all four targets, plus the checks that need no compiler,
+# plus the one path a normal build here never takes.
+#
+# **Two jobs here need a published release and will fail on a repository that has not cut
+# one yet: `leaks` and `consumer-fetch`.** Both resolve their archive by downloading it, and
+# that is deliberate in both cases — `leaks` should be measuring the artifact consumers
+# actually link, and `consumer-fetch` exists precisely to exercise the download path. The
+# bootstrap order is therefore: run `build.yml` by hand to check the four targets compile,
+# then `release.yml` to publish, and CI is green from that commit onwards. Every other job
+# here is self-contained.
+on:
+  push:
+    # Documentation cannot break a build, and a README-only commit should not spend a runner
+    # proving it.
+    paths-ignore: ["**.md"]
+  pull_request:
+    paths-ignore: ["**.md"]
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        # `-x` so that `. ./fdk-aac.env` and `. ./source.sh` are followed rather than
+        # reported as unresolvable.
+        run: |
+          shellcheck -x build.sh sync-prebuilt.sh test-docker.sh check-static.sh \
+                        crates/fdk-aac-prebuilt-sys/gen-bindings.sh \
+                        crates/fdk-aac-prebuilt-sys/gen-version.sh
+
+  # A separate job on macOS for one reason: its `/bin/bash` is 3.2, from 2007, and that is
+  # what a stock Mac runs. shellcheck accepts bash-5-only constructs happily, and
+  # `$(case … esac)` — legal in bash 4+, a syntax error in 3.2 — is the kind of thing that
+  # breaks on the macOS runner while passing on every other target and on a Mac with
+  # Homebrew's bash earlier in PATH. Parsing is enough to catch that class of bug, and it
+  # costs seconds.
+  stock-bash:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse every script with the bash a stock Mac ships
+        run: |
+          /bin/bash --version | head -1
+          /bin/bash -n build.sh source.sh sync-prebuilt.sh test-docker.sh check-static.sh \
+                       crates/fdk-aac-prebuilt-sys/gen-bindings.sh \
+                       crates/fdk-aac-prebuilt-sys/gen-version.sh
+          echo "every script parses under bash $(/bin/bash -c 'echo $BASH_VERSION')"
+
+  # The generated files, against the source they were generated from.
+  #
+  # Three links in one chain: fdk-aac.env pins a checksum, the checksum gates the tarball,
+  # the tarball is where the headers come from, and the headers are where bindings.rs comes
+  # from — with version.rs coming from the .cpp sources beside them. It holds only if every
+  # link is checked, and `--check` is the only thing that checks them.
+  #
+  # Separate from `scripts` because it needs libclang and a bindgen install, which is a
+  # minute this repository should not spend on a shellcheck-only change.
+  generated:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the pinned bindgen
+        run: |
+          sudo apt-get update && sudo apt-get install -y libclang-dev
+          cargo install bindgen-cli --version 0.72.1 --locked
+      - run: ./sync-prebuilt.sh --check
+
+  # fmt and clippy. Not present in libopus-prebuilt, and added here because this fork's
+  # wrapper is *changed* from upstream rather than copied verbatim — so its style is this
+  # repository's responsibility rather than somebody else's, and there is no "matching
+  # upstream" defence for a lint.
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      # fmt first and on its own: it needs nothing built, so a formatting failure reports in
+      # seconds rather than after a C++ compile.
+      - run: cargo fmt --all --check
+      # clippy has to run the build script, which has to resolve an archive. Built locally
+      # rather than fetched, so that linting does not depend on a release existing — which
+      # matters most in the one situation where it would be least convenient, namely a
+      # repository that has not cut its first release yet.
+      - run: ./build.sh linux-x86_64 && ./sync-prebuilt.sh
+      - run: cargo clippy --offline --workspace --all-targets -- -D warnings
+
+  # The real gate: build an archive, link the crates against it, run the tests and the
+  # end-to-end binary. x86_64 rather than arm64 because it is the target whose floor is a
+  # deliberate exclusion — a wrong answer there is an illegal instruction on somebody's
+  # machine, where on arm64 it would only be a slower library.
+  #
+  # Calling build.yml rather than repeating it means CI, the manual test loop and the release
+  # all exercise the same code, with no CI-only build to drift.
+  archives:
+    uses: ./.github/workflows/build.yml
+    with:
+      targets: x86_64
+
+  # Is the library reproducible? The `archives` job above built one on its own runner; this
+  # builds the same target again, on a different runner, and requires the two
+  # `libfdk-aac.a` files to be **byte-identical**.
+  #
+  # That is the checksum that actually means something. The `.tar.gz` around it is not
+  # reproducible — gzip stamps an mtime into its header — so SHA256SUMS can only ever say
+  # "these are the bytes that were published", which is what a download needs and no more.
+  # This says the stronger thing: the same source and the same flags produce the same
+  # library, so a change in it is a change somebody made.
+  #
+  # Two independent runners rather than two builds on one, because a compiler that embeds a
+  # path, a timestamp or a hostname would pass the second and fail this.
+  #
+  # It only holds because build.sh exports `SOURCE_DATE_EPOCH`: fdk-aac compiles `__DATE__`
+  # and `__TIME__` into eight of its modules, evaluated per translation unit, so without that
+  # a single build embeds a spread of timestamps and no two builds agree. **linux-x86_64
+  # only** — cl.exe honours no such variable, so the MSVC archive is not reproducible and
+  # this job would be asserting something untrue about it.
+  reproducible:
+    needs: archives
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rebuild linux-x86_64
+        run: ./build.sh linux-x86_64
+
+      - name: Download the archive the other runner built
+        uses: actions/download-artifact@v4
+        with:
+          name: fdk-aac-linux-x86_64
+          path: theirs
+
+      - name: The two must be byte-identical
+        run: |
+          mine="$(sha256sum dist/linux-x86_64/lib/libfdk-aac.a | awk '{print $1}')"
+          theirs="$(sha256sum theirs/lib/libfdk-aac.a | awk '{print $1}')"
+          echo "  this runner: $mine"
+          echo "  the other:   $theirs"
+          # Also against what the other runner recorded for itself, which catches a MANIFEST
+          # that disagrees with the file shipped beside it.
+          recorded="$(awk '$1=="sha256(library)"{print $2}' theirs/MANIFEST)"
+          [ "$recorded" = "$theirs" ] || {
+            echo "::error::MANIFEST says $recorded but the archive hashes to $theirs"
+            exit 1
+          }
+          [ "$mine" = "$theirs" ] || {
+            echo "::error::the same commit produced two different libraries on two runners"
+            exit 1
+          }
+          echo "  reproducible: same source, same flags, same library"
+
+  # Leak checking on the one platform that has `leaks` — macOS. The other two legs live
+  # elsewhere: valgrind runs under `test-docker.sh` on Linux, and the e2e binary's own RSS
+  # churn check runs on all four targets, Windows included.
+  #
+  # `leaks` rather than a Rust allocator hook, because fdk-aac allocates with C `malloc`
+  # through libSYS. A `GlobalAlloc` counter sees only Rust-side allocation and would report
+  # a clean run however badly the handles leaked — which is why the control below is not
+  # optional.
+  leaks:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # No local build: fetching the release archive is faster than compiling fdk-aac, and
+      # it is the artifact consumers actually link.
+      - name: Build the e2e binary
+        run: cargo build --release -p fdk-aac-e2e
+
+      - name: No leaks
+        env:
+          # Required, not tidiness. The binary's own RSS check creates and destroys 1200
+          # codecs, and `leaks` inspects the process at exit — the churn makes its report
+          # noisy for no benefit, and the tool below is the better instrument anyway.
+          FDK_AAC_E2E_MEMORY: "off"
+        run: |
+          # --atExit runs the process to completion and inspects it just before it dies,
+          # which is the only moment a leak is distinguishable from memory still in use.
+          MallocStackLogging=1 leaks --atExit -- ./target/release/fdk-aac-e2e >leaks.log 2>&1 \
+            || { grep -E 'leaks for|Leak:' leaks.log | head -20; exit 1; }
+          grep -E 'leaks for' leaks.log
+
+      - name: And the control — a deliberate leak must be caught
+        env:
+          FDK_AAC_E2E_MEMORY: "off"
+        run: |
+          # If this passes, the check above proves nothing: it would mean `leaks` cannot see
+          # fdk-aac's allocations, and a clean report is a blind one.
+          if MallocStackLogging=1 leaks --atExit -- \
+               ./target/release/fdk-aac-e2e --leak-only >control.log 2>&1; then
+            echo "::error::leaks did not notice 120 deliberately forgotten fdk-aac handles"
+            exit 1
+          fi
+          grep -E 'leaks for' control.log
+
+  # The one path nothing else takes. Every other job populates `prebuilt/` from a local build
+  # first, which means build.rs's third resolution step — download the asset, check it
+  # against the release's SHA256SUMS, unpack it, hash the library against its MANIFEST — is
+  # what every *consumer's* first build does and the one thing building here never
+  # exercises. This job leaves prebuilt/ empty on purpose and lets it fetch.
+  consumer-fetch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build as a consumer does, with nothing prebuilt locally
+        run: |
+          # No ./build.sh and no ./sync-prebuilt.sh. This is a clone with an empty prebuilt/,
+          # which is the state every consuming project is in.
+          cargo build -vv --release 2>&1 | tee build.log | tail -5
+          grep -oE 'cargo:info=fdk-aac.*' build.log | sort -u
+
+          # Which source satisfied the link, asserted rather than assumed: if a stray archive
+          # or a system libfdk-aac had satisfied it, this job would pass while testing
+          # nothing at all.
+          grep -q 'linked statically from latest release asset' build.log || {
+            echo "::error::the archive did not come from the release"
+            exit 1
+          }
+
+          # And that both integrity checks ran. A verification that silently stops running is
+          # worse than one that was never written, because the log still looks right — so the
+          # log is what gets checked.
+          for claim in 'matches SHA256SUMS' 'matches the MANIFEST'; do
+            grep -q "$claim" build.log || {
+              echo "::error::build.rs did not report '$claim' — the check did not run"
+              exit 1
+            }
+          done
+          echo "download and archive both verified"
+
+      - name: Test and run the binary it fetched
+        run: |
+          cargo test --workspace --release
+          ./target/release/fdk-aac-e2e
+          ./check-static.sh target/release/fdk-aac-e2e

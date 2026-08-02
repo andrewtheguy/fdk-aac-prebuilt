@@ -1,0 +1,23 @@
+[package]
+name = "fdk-aac-prebuilt"
+version.workspace = true
+edition = "2021"
+rust-version = "1.70"
+description = "Safe Rust bindings for the Fraunhofer FDK AAC codec, linked from a prebuilt static archive"
+# The Rust in this crate descends from `fdk-aac` 0.8.0 by Hailey Somerville, which is MIT,
+# and stays MIT. That covers the *binding*; the codec it binds is under the Fraunhofer
+# licence at the repository root, which is the one with the patent notice in it. See the
+# README's licensing section — the distinction matters and is easy to miss.
+license = "MIT"
+repository = "https://github.com/andrewtheguy/fdk-aac-prebuilt"
+publish = false
+
+[lib]
+# `fdk_aac`, not `fdk_aac_prebuilt`. This is what makes the swap a one-line change for a
+# consumer: with `fdk-aac = { package = "fdk-aac-prebuilt", … }` in their manifest, every
+# `use fdk_aac::enc::…` and `fdk_aac::dec::Decoder::new` in their source keeps compiling.
+name = "fdk_aac"
+path = "src/lib.rs"
+
+[dependencies]
+fdk-aac-prebuilt-sys = { path = "../fdk-aac-prebuilt-sys" }
