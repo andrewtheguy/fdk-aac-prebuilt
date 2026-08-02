@@ -340,18 +340,44 @@ avx_evidence='n/a'
 case "$target" in
   linux-x86_64 | macos-arm64 | linux-aarch64)
     if command -v objdump >/dev/null 2>&1; then
-      case "$target" in
-        linux-x86_64)
-          count="$(objdump -d "$out/lib/$lib_name" 2>/dev/null |
-            grep -ciE '\s(vp[a-z]+|vmov[a-z]*|vfmadd[0-9a-z]*)\s' || true)"
-          avx_evidence="${count:-0} AVX/AVX2 instructions"
-          ;;
-        *)
-          count="$(objdump -d "$out/lib/$lib_name" 2>/dev/null |
-            grep -ciE '\s(ld[0-9]|st[0-9]|fmla|smlal|sqdmulh)\s' || true)"
-          avx_evidence="${count:-0} NEON instructions"
-          ;;
-      esac
+      # Disassembled once, and *checked by counting instructions*, because the failure that
+      # matters here is silent. An objdump built for another architecture still prints file
+      # headers and still exits 0 — it writes `can't disassemble for architecture UNKNOWN!`
+      # to stderr, which `2>/dev/null` swallows — so it yields several kilobytes of output
+      # containing no instructions at all. Testing that the output is merely non-empty is not
+      # enough; it passes on exactly that. So the test is whether anything was actually
+      # disassembled, and a zero is only reported when there was something to count it in.
+      #
+      # The alternative, "0 instructions", reads as lost vectorization when it means a blind
+      # instrument — and a clean report from a blind instrument is the one thing the rest of
+      # this repository refuses to ship.
+      disassembly="$(objdump -d "$out/lib/$lib_name" 2>/dev/null || true)"
+      # Both objdumps prefix a disassembled line with its address and a colon.
+      instructions="$(grep -cE '^[[:space:]]*[0-9a-f]+:' <<<"$disassembly" || true)"
+      # These archives hold hundreds of thousands of instructions, so this separates "it
+      # worked" from "it did not" with no risk of landing in between.
+      if [ "${instructions:-0}" -lt 1000 ]; then
+        avx_evidence="not measured (objdump disassembled only ${instructions:-0} instructions)"
+      else
+        case "$target" in
+          linux-x86_64)
+            count="$(grep -ciE '\s(vp[a-z]+|vmov[a-z]*|vfmadd[0-9a-z]*)[[:space:].]' \
+              <<<"$disassembly" || true)"
+            avx_evidence="${count:-0} AVX/AVX2 instructions"
+            ;;
+          *)
+            # A dot *or* whitespace after the mnemonic, because the two objdumps disagree on
+            # how to print a vector arrangement: Apple's llvm-objdump writes `ld1.4s` and
+            # `smlal.4s`, GNU objdump on Linux writes `ld1 {v0.4s}, [x0]`. Requiring
+            # whitespace reported `0 NEON instructions` for macos-arm64 — built with
+            # `-mcpu=apple-m1` — while linux-aarch64, built with no floor at all, reported
+            # 274. The archive was fine; the pattern was measuring one toolchain's syntax.
+            count="$(grep -ciE '\s(ld[0-9]|st[0-9]|fmla|smlal|sqdmulh)[[:space:].]' \
+              <<<"$disassembly" || true)"
+            avx_evidence="${count:-0} NEON instructions"
+            ;;
+        esac
+      fi
       echo "   $avx_evidence"
     fi
     ;;
