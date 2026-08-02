@@ -18,7 +18,14 @@ Cargo.lock
 # project; anything that holds for everyone belongs in a committed CLAUDE.md instead.
 CLAUDE.local.md
 
-# Written by fdk-aac-e2e when it runs. The pipeline uploads it per target and the
-# `bit-exact` job compares the four; a copy from whichever machine last ran the binary is
-# not a fact about the repository.
+# Written by fdk-aac-e2e when it runs. The pipeline uploads these per target and compares
+# them between targets; a copy from whichever machine last ran the binary is not a fact about
+# the repository. e2e-out/ holds the structural facts and the decoded audio the
+# cross-architecture SNR job measures.
 digests.txt
+e2e-out/
+
+# Written by `cargo test --test audio_dump -- --ignored`, to listen to. Several megabytes of
+# regenerable WAV, and regenerating it is the point — a committed copy would be one machine's
+# rendering of signals that are meant to be produced fresh by whoever is listening.
+audio/

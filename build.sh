@@ -234,16 +234,29 @@ entry_points='aacEncOpen aacEncEncode aacEncInfo aacEncGetLibInfo aacEncoder_Set
 case "$target" in
   windows-*)
     # `nm` is not on a Windows runner's PATH and `lib /list` needs an MSVC environment this
-    # script does not set up. The compiled object files answer a weaker version of the same
-    # question one step earlier: if cmake decided against a module, its objects do not exist.
-    for module in libAACenc libAACdec libFDK libMpegTPEnc libMpegTPDec libSBRenc libSBRdec; do
-      found="$(find "build/$target" -path "*$module*" -name '*.obj' | wc -l | tr -d ' ')"
-      [ "$found" -gt 0 ] || {
-        echo "no object files for $module — the build is missing a module" >&2
+    # script does not set up. A COFF archive, though, stores its symbol table as plain
+    # NUL-terminated ASCII, so the entry points can be read straight out of the file — which
+    # asks the same question as the `nm` branch below, about the same artifact.
+    #
+    # What this replaced: a glob for each module directory in the `.obj` paths. That was a
+    # weaker proxy — "did cmake emit objects for this module" rather than "is the function in
+    # the library" — and it was also simply wrong. With no `-G`, Windows gets the Visual
+    # Studio generator, which flattens objects into `fdk-aac.dir/Release/` with no source
+    # directory in the path, so `-path "*libAACenc*"` matched nothing and *every* Windows
+    # build failed here with "the build is missing a module" on a library that was fine.
+    #
+    # x64 is the reason the names can be matched literally: MSVC decorates `__cdecl` symbols
+    # with a leading underscore on x86 but not on x64, and these are plain C entry points.
+    symbols="$(LC_ALL=C tr -c '[:print:]' '\n' <"$out/lib/$lib_name")"
+    for symbol in $entry_points; do
+      # `-x` so a name only ever matches a symbol-table entry standing on its own, rather
+      # than as a substring of some longer string that happens to be in the file.
+      grep -qxF "$symbol" <<<"$symbols" || {
+        echo "$symbol is not in $lib_name — this is not a complete fdk-aac" >&2
         exit 1
       }
     done
-    echo "   every module produced objects"
+    echo "   $(printf '%s\n' "$entry_points" | wc -w | tr -d ' ') entry points present in the archive"
     ;;
   *)
     symbols="$(nm --defined-only "$out/lib/$lib_name" 2>/dev/null || true)"
