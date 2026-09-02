@@ -33,8 +33,9 @@ cd "$here"
 crate=crates/fdk-aac-prebuilt-sys
 prebuilt="$crate/prebuilt"
 
-# Every target build.sh knows how to make.
-targets=(macos-arm64 linux-x86_64 linux-aarch64 windows-x86_64-msvc)
+# Every target build.sh knows how to make, both x86_64 flavours included.
+targets=(macos-arm64 linux-x86_64 linux-x86_64-v3 linux-aarch64
+         windows-x86_64-msvc windows-x86_64-msvc-v3)
 
 # The six headers cmake installs, at the paths they live at in the source tree. Named here
 # rather than globbed, because "every .h under libSYS" is a different and much larger set —

@@ -131,7 +131,7 @@ jobs:
           # Named here rather than discovered, so that a target silently missing from the
           # matrix is a failed release instead of a release somebody links against six months
           # later and finds nothing for their platform.
-          expected="macos-arm64 linux-x86_64 linux-aarch64 windows-x86_64-msvc"
+          expected="macos-arm64 linux-x86_64 linux-x86_64-v3 linux-aarch64 windows-x86_64-msvc windows-x86_64-msvc-v3"
           for target in $expected; do
             dir="artifacts/fdk-aac-$target"
             [ -f "$dir/MANIFEST" ] || {
@@ -203,15 +203,22 @@ jobs:
 
           ## CPU floors
 
-          The \`x86_64\` archives have **no floor above the x86-64 baseline** and run on any
-          x86-64. fdk-aac has no runtime CPU dispatch of its own — no CPUID, no SIMD kernels —
-          so, unlike \`libopus-prebuilt\`, there is nothing to select at run time and the
-          baseline is the only build that runs everywhere. What a Coffee Lake floor used to
-          add was autovectorisation of the scalar loops with AVX2 instead of SSE2, measured at
-          five to ten percent of about one percent of a core, with identical output bytes.
-          \`build.sh\` asserts the linux-x86_64 archive contains no AVX instruction at all.
-          A project that wants the floor back should build its own and point
-          \`FDK_AAC_PREBUILT_DIR\` at the prefix.
+          Two archives per x86_64 platform. The default, \`linux-x86_64\` and
+          \`windows-x86_64-msvc\`, has **no floor above the x86-64 baseline** and runs on any
+          x86-64; \`build.sh\` asserts the Linux one contains no AVX instruction at all. The
+          \`-v3\` twins are the same source built to **x86-64-v3 (AVX2, Coffee Lake or
+          newer)**, which fdk-aac — having no runtime CPU dispatch of its own — can only use if
+          the whole archive assumes it. Enable the crate's \`x86-64-v3\` feature to link
+          those instead:
+
+          \`\`\`toml
+          fdk-aac = { package = "fdk-aac-prebuilt", git = "https://github.com/${GITHUB_REPOSITORY}", tag = "${TAG}", features = ["x86-64-v3"] }
+          \`\`\`
+
+          What it buys is autovectorisation of the scalar loops with AVX2 instead of SSE2,
+          measured at five to ten percent of about one percent of a core, with byte-identical
+          output; what it costs is an illegal instruction on any CPU without AVX2. Both
+          flavours encode identical bitstreams, and the pipeline asserts that on every release.
           \`macos-arm64\` is built for \`apple-m1\`, which every arm64 Mac satisfies;
           \`linux-aarch64\` is baseline ARMv8-A.
 

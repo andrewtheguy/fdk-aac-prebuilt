@@ -5,6 +5,11 @@ edition = "2021"
 description = "End-to-end check: a real binary that encodes and decodes AAC"
 publish = false
 
+[features]
+# So the pipeline can build this consumer against the -v3 archive the way a real consumer
+# would: `features = ["x86-64-v3"]` on the dependency line, which is what this forwards.
+x86-64-v3 = ["fdk-aac/x86-64-v3", "fdk-aac-sys/x86-64-v3"]
+
 [dependencies]
 # Written exactly the way a consuming project writes it, rename and all — so this
 # dependency line is itself part of what the pipeline tests. A project would use

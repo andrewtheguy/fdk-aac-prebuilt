@@ -7,8 +7,15 @@
 # Targets:
 #   macos-arm64            libfdk-aac.a   (Apple silicon, deployment target 11.0)
 #   linux-x86_64           libfdk-aac.a   (x86-64 baseline; no floor above SSE2)
+#   linux-x86_64-v3        libfdk-aac.a   (x86-64-v3 / Coffee Lake floor: AVX2 autovectorized)
 #   linux-aarch64          libfdk-aac.a   (ARMv8-A baseline)
 #   windows-x86_64-msvc    fdk-aac.lib    (x86-64 baseline; dynamic CRT)
+#   windows-x86_64-msvc-v3 fdk-aac.lib    (x86-64-v3 / Coffee Lake floor; dynamic CRT)
+#
+# The `-v3` targets are the same configuration as their base target plus a CPU floor. Both
+# flavours are published on every release; the crate links the baseline unless a consumer
+# enables its `x86-64-v3` feature. See the note under linux-x86_64 below for why the choice
+# has to be made at build time rather than at run time.
 #
 # Output: dist/<target>/{lib,include}/… plus a MANIFEST naming the version, the checksum,
 # the flags, the CPU floor and — the one this codec needs and libopus did not — which C++
@@ -117,6 +124,12 @@ cxxflag_supported() {
 # MANIFEST would look like a bug in the build rather than an unreachable default.
 floor='unset'
 
+# Which flavour of an x86_64 target this is. `baseline` is every target that has no `-v3`
+# suffix, including the arm ones, for which the word means "the floor this target names";
+# the verification below only consults it on x86_64.
+flavour=baseline
+case "$target" in *-v3) flavour=v3 ;; esac
+
 lib_name=libfdk-aac.a
 case "$target" in
   macos-arm64)
@@ -138,11 +151,11 @@ case "$target" in
       floor='armv8-a (compiler rejected -mcpu=apple-m1)'
     fi
     ;;
-  linux-x86_64)
-    # No floor above the x86-64 baseline, and no `-march`. This was `-march=x86-64-v3
-    # -mtune=skylake` — the Coffee Lake floor libopus-prebuilt had at the time — until a
-    # binary linking that repository's archive died on the first AVX2 instruction on an Ivy
-    # Bridge, and both repositories dropped the floor.
+  linux-x86_64 | linux-x86_64-v3)
+    # The default archive has no floor above the x86-64 baseline, and no `-march`. It was
+    # `-march=x86-64-v3 -mtune=skylake` — the Coffee Lake floor libopus-prebuilt had at the
+    # time — until a binary linking that repository's archive died on the first AVX2
+    # instruction on an Ivy Bridge, and both repositories dropped the floor.
     #
     # libopus-prebuilt could drop it and keep its SIMD, because opus compiles SSE4.1 and AVX2
     # kernels per file and picks one by CPUID at run time. fdk-aac has no such mechanism to
@@ -152,13 +165,23 @@ case "$target" in
     # code. So "dispatch or presume" is not a choice this library offers; the only knob is
     # the floor, and the only thing the floor changes is which instructions the
     # autovectorizer may use for the scalar loops. At the baseline it still vectorizes them
-    # with SSE2, which the verification below counts, and what AVX2 added on top of that is
-    # measured in the README.
+    # with SSE2, which the verification below counts.
     #
-    # What a leaked floor would cost is the same illegal instruction libopus's users hit,
-    # so the archive is checked below for containing no AVX instruction at all — the
-    # property a global `-march`, or a CXXFLAGS in the runner's environment, would break.
-    floor='x86-64 baseline (SSE2; fdk-aac has no runtime dispatch, so nothing above it is used)'
+    # Since the choice cannot be made at run time, it is made at build time, twice: the
+    # `-v3` flavour is the same archive with the old floor back, for consumers who have
+    # measured the difference (the README has the numbers: five to ten percent of about one
+    # percent of a core) and know every machine they ship to has AVX2. The crate picks it
+    # with a cargo feature; the default is the archive that cannot SIGILL.
+    #
+    # `-mtune=skylake` on the v3 flavour changes scheduling only, never the instruction set,
+    # and is kept so the archive is byte-identical to the releases that shipped before the
+    # floor was dropped — the reproducibility comparison across releases depends on that.
+    if [ "$flavour" = v3 ]; then
+      floor='x86-64-v3 / Coffee Lake (AVX2+FMA unconditional; fdk-aac has no runtime dispatch)'
+      cflags+=(-march=x86-64-v3 -mtune=skylake)
+    else
+      floor='x86-64 baseline (SSE2; fdk-aac has no runtime dispatch, so nothing above it is used)'
+    fi
     ;;
   linux-aarch64)
     # No floor to *choose*. arm64 Linux spans a decade of very different cores, NEON is
@@ -170,15 +193,21 @@ case "$target" in
     # scalar code, so a higher floor would cost compatibility for nothing.
     floor='armv8-a (baseline)'
     ;;
-  windows-x86_64-msvc)
+  windows-x86_64-msvc | windows-x86_64-msvc-v3)
     lib_name=fdk-aac.lib
     # Rust's MSVC targets link the dynamic CRT, and a static library built against the
     # static one fails to link with the mismatch that costs everybody an afternoon.
     cmake_args+=(-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL)
-    # Same as linux-x86_64: no `/arch:`. cl.exe's x64 default code generation is SSE2, which
-    # is the baseline, and it autovectorizes at that level as GCC does. This was
-    # `/arch:AVX2` for the same reason and the same length of time as the Linux floor.
-    floor='x86-64 baseline (SSE2; fdk-aac has no runtime dispatch, so nothing above it is used)'
+    # Same two flavours as Linux. cl.exe's x64 default code generation is SSE2, which is the
+    # baseline, and it autovectorizes at that level as GCC does; `/arch:AVX2` is the whole
+    # of what it offers for the v3 flavour — there is no `/arch:` level between AVX2 and
+    # AVX512, and no separate tuning flag.
+    if [ "$flavour" = v3 ]; then
+      floor='x86-64-v3 / Coffee Lake (AVX2+FMA unconditional; fdk-aac has no runtime dispatch)'
+      cflags+=(/arch:AVX2)
+    else
+      floor='x86-64 baseline (SSE2; fdk-aac has no runtime dispatch, so nothing above it is used)'
+    fi
     ;;
   *)
     echo "unknown target: $target" >&2
@@ -379,8 +408,8 @@ if [ ${#cflags[@]} -gt 0 ]; then
   done
   echo "   ${cflags[*]} reached the compiler"
 fi
-case "$target" in
-  *x86_64*)
+case "$target:$flavour" in
+  *x86_64*:baseline)
     # The cache proves intent: nothing that names a CPU or an instruction set extension, from
     # this script or from the environment. `-mtune` is included although it cannot break a
     # machine, because a CPU name in the MANIFEST of an archive built for every CPU reads as
@@ -391,25 +420,36 @@ case "$target" in
     fi
     echo "   no -march, -mcpu, -mtune or /arch: in CMAKE_CXX_FLAGS"
     ;;
+  *x86_64*:v3)
+    # The opposite failure: a v3 archive that quietly came out at the baseline is merely
+    # slower, but it wears a MANIFEST claiming a floor it does not have, and the loop above
+    # only proved the flags are in the cache. The disassembly check below proves the
+    # compiler acted on them, where a disassembler exists.
+    [ ${#cflags[@]} -gt 0 ] || {
+      echo "the v3 flavour of $target set no compiler flags — this is the script's bug" >&2
+      exit 1
+    }
+    ;;
 esac
 
 # The archive proves the result, where a disassembler that understands the format exists.
-# On x86_64 the assertion is that no AVX instruction is in it at all — not "outside the
-# kernels", as libopus-prebuilt checks, because fdk-aac has no kernels: with no runtime
-# dispatch, one AVX instruction anywhere is one machine it will not run on. Every AVX
-# mnemonic is VEX-encoded and objdump spells every VEX-encoded mnemonic with a leading `v`,
-# so the test is the mnemonic column, with the handful of non-AVX `v*` opcodes (the VMX
-# instructions and `verr`/`verw`, none of which a codec emits) excluded by name rather than
-# by pattern. Alongside it, the SSE2 packed-integer count is recorded as evidence — not a
-# gate — that the autovectorizer is still doing its job at the baseline; on the aarch64
-# targets the NEON count plays the same role.
+# On the x86_64 baseline the assertion is that no AVX instruction is in it at all — not
+# "outside the kernels", as libopus-prebuilt checks, because fdk-aac has no kernels: with no
+# runtime dispatch, one AVX instruction anywhere is one machine it will not run on. On the
+# v3 flavour it is the reverse: AVX instructions must be present, or the floor did nothing.
+# Every AVX mnemonic is VEX-encoded and objdump spells every VEX-encoded mnemonic with a
+# leading `v`, so the test is the mnemonic column, with the handful of non-AVX `v*` opcodes
+# (the VMX instructions and `verr`/`verw`, none of which a codec emits) excluded by name
+# rather than by pattern. Alongside it, the SSE2 packed-integer count is recorded as
+# evidence — not a gate — that the autovectorizer is still doing its job at the baseline; on
+# the aarch64 targets the NEON count plays the same role.
 #
 # Windows has no such disassembler on the runner, and the runner's own CPU has AVX2, so
 # running the e2e binary there cannot catch a leak either. The cache check above is what
 # covers that target, which is stated in its MANIFEST rather than hidden.
 avx_evidence='n/a'
 case "$target" in
-  linux-x86_64 | macos-arm64 | linux-aarch64)
+  linux-x86_64 | linux-x86_64-v3 | macos-arm64 | linux-aarch64)
     if command -v objdump >/dev/null 2>&1; then
       # Disassembled once, and *checked by counting instructions*, because the failure that
       # matters here is silent. An objdump built for another architecture still prints file
@@ -444,19 +484,28 @@ case "$target" in
             # GNU objdump's lines are tab-separated: address, bytes, then mnemonic and
             # operands. Prefix words (`lock`, `rep`, `notrack`, `data16`) land in the
             # mnemonic slot and none of them starts with `v`, so they cannot be miscounted.
-            leaked="$(awk -F'\t' 'NF >= 3 {
+            avx="$(awk -F'\t' 'NF >= 3 {
                 split($3, f, " "); m = f[1]
                 if (m ~ /^v[a-z]/ && m !~ /^(verr|verw|vmcall|vmclear|vmfunc|vmlaunch|vmload|vmmcall|vmptrld|vmptrst|vmread|vmresume|vmrun|vmsave|vmwrite|vmxoff|vmxon)$/) print m
               }' <<<"$disassembly" | sort | uniq -c | sort -rn)"
-            [ -z "$leaked" ] || {
-              echo "AVX instructions in $lib_name — a floor leaked in. The archive would SIGILL" >&2
-              echo "on any CPU without them; by mnemonic:" >&2
-              echo "$leaked" | sed 's/^/    /' >&2
-              exit 1
-            }
-            sse2="$(grep -cE '[[:space:]](p(add|sub|mul|madd|and|or|xor|unpck|shuf|srl|sll|sra|cmp|max|min)[a-z]*|movdq[au])[[:space:]]' \
-              <<<"$disassembly" || true)"
-            avx_evidence="0 AVX instructions (asserted), ${sse2:-0} SSE2 packed-integer instructions"
+            avx_count="$(awk '{ n += $1 } END { print n + 0 }' <<<"$avx")"
+            if [ "$flavour" = baseline ]; then
+              [ "$avx_count" -eq 0 ] || {
+                echo "AVX instructions in $lib_name — a floor leaked in. The archive would SIGILL" >&2
+                echo "on any CPU without them; by mnemonic:" >&2
+                echo "$avx" | sed 's/^/    /' >&2
+                exit 1
+              }
+              sse2="$(grep -cE '[[:space:]](p(add|sub|mul|madd|and|or|xor|unpck|shuf|srl|sll|sra|cmp|max|min)[a-z]*|movdq[au])[[:space:]]' \
+                <<<"$disassembly" || true)"
+              avx_evidence="0 AVX instructions (asserted), ${sse2:-0} SSE2 packed-integer instructions"
+            else
+              [ "$avx_count" -gt 0 ] || {
+                echo "no AVX instructions in $lib_name despite ${cflags[*]} — the floor did not take" >&2
+                exit 1
+              }
+              avx_evidence="$avx_count AVX instructions (asserted present)"
+            fi
             ;;
           *-arm64 | *-aarch64)
             # A dot *or* whitespace after the mnemonic, because the two objdumps disagree on

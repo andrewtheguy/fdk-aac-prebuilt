@@ -24,4 +24,12 @@ build = "build.rs"
 # publication.
 publish = false
 
+[features]
+# Link the x86-64-v3 flavour of the archive instead of the baseline one, on x86_64 targets
+# only. fdk-aac has no runtime CPU dispatch, so this is the only way to get its scalar loops
+# autovectorized with AVX2 — and the only way to get a binary that dies with an illegal
+# instruction on a CPU without it. Off by default for that reason; the README has the
+# measured difference, which is small. Ignored, with a `cargo:info` line, on other targets.
+x86-64-v3 = []
+
 [dependencies]

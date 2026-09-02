@@ -63,11 +63,16 @@ jobs:
         env:
           GROUP: ${{ inputs.targets || 'all' }}
         run: |
+          # `cargo` carries the flag that makes the crates link *this* archive rather than
+          # the default one — the `-v3` flavours exist only if a consumer asks for them by
+          # feature, and the pipeline has to ask the same way a consumer would.
           all='[
-            {"target":"macos-arm64",         "runs-on":"macos-latest",    "group":"arm64"},
-            {"target":"linux-x86_64",        "runs-on":"ubuntu-24.04",    "group":"x86_64"},
-            {"target":"linux-aarch64",       "runs-on":"ubuntu-24.04-arm","group":"arm64"},
-            {"target":"windows-x86_64-msvc", "runs-on":"windows-latest",  "group":"windows"}
+            {"target":"macos-arm64",            "runs-on":"macos-latest",    "group":"arm64",   "cargo":""},
+            {"target":"linux-x86_64",           "runs-on":"ubuntu-24.04",    "group":"x86_64",  "cargo":""},
+            {"target":"linux-x86_64-v3",        "runs-on":"ubuntu-24.04",    "group":"x86_64",  "cargo":"--features fdk-aac-e2e/x86-64-v3"},
+            {"target":"linux-aarch64",          "runs-on":"ubuntu-24.04-arm","group":"arm64",   "cargo":""},
+            {"target":"windows-x86_64-msvc",    "runs-on":"windows-latest",  "group":"windows", "cargo":""},
+            {"target":"windows-x86_64-msvc-v3", "runs-on":"windows-latest",  "group":"windows", "cargo":"--features fdk-aac-e2e/x86-64-v3"}
           ]'
           targets="$(jq -c --arg g "$GROUP" '[.[] | select($g == "all" or .group == $g)]' <<<"$all")"
           echo "$targets" | jq -r '.[].target' | sed 's/^/  /'
@@ -81,7 +86,7 @@ jobs:
     needs: plan
     strategy:
       # No fail-fast: one target failing to configure is exactly the case where the other
-      # three logs are the useful comparison.
+      # five logs are the useful comparison.
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.targets) }}
@@ -104,7 +109,7 @@ jobs:
         shell: bash
         run: |
           ./sync-prebuilt.sh
-          cargo test --offline --workspace
+          cargo test --offline --workspace ${{ matrix.cargo }}
 
       # The end-to-end leg: a release binary that is a *consumer* of the crate, executed on
       # the runner's own processor. It is the only place Windows gets exercised at all, since
@@ -114,7 +119,7 @@ jobs:
       - name: End to end — encode and decode in a real binary
         shell: bash
         run: |
-          cargo build --offline --release --workspace
+          cargo build --offline --release --workspace ${{ matrix.cargo }}
           bin=target/release/fdk-aac-e2e
           [ -f "$bin" ] || bin="$bin.exe"
           "$bin"
@@ -160,10 +165,12 @@ jobs:
   # rebuilding linux-x86_64 with `-ffp-contract=off` — or at the baseline instead of
   # x86-64-v3 — changes not one digest.
   #
-  # So the four are compared at the three strengths they actually agree at — structure
+  # So the targets are compared at the three strengths they actually agree at — structure
   # exactly, size within a tolerance, decoded audio as an SNR and a correlation, and digests
   # byte-for-byte but only between targets of the same architecture. compare-targets.py has
-  # the measured numbers and the reasoning behind each floor.
+  # the measured numbers and the reasoning behind each floor. The x86_64 group holds both
+  # flavours of both platforms, so the digest comparison also asserts, on every run, that the
+  # x86-64-v3 floor changes speed and not one byte of output.
   #
   # `if: always()` with an explicit expected count, rather than a `>= 2` guard: with fail-fast
   # off, a partial matrix would otherwise let the survivors "agree" among themselves. The
