@@ -24,6 +24,7 @@ image=fdk-aac-prebuilt-test
 targets=(
   "linux-aarch64:linux/arm64"
   "linux-x86_64:linux/amd64"
+  "linux-x86_64-v3:linux/amd64"
 )
 
 want="${1:-}"
@@ -61,6 +62,11 @@ for entry in "${targets[@]}"; do
   platform="${entry##*:}"
   [ -z "$want" ] || [ "$want" = "$target" ] || continue
 
+  # The -v3 archive is linked only when a consumer asks for it by feature, so the cargo
+  # commands below have to ask the same way. Empty for every other target.
+  cargo_features=""
+  case "$target" in *-v3) cargo_features="--features fdk-aac-e2e/x86-64-v3" ;; esac
+
   echo
   echo "=============== $target ($platform)"
   build_image "$platform" || {
@@ -82,11 +88,11 @@ for entry in "${targets[@]}"; do
         ./sync-prebuilt.sh
         # --offline proves the point of the exercise: after sync-prebuilt.sh there is
         # nothing left to fetch, so a consumer's build needs no network either.
-        cargo test --offline --workspace
+        cargo test --offline --workspace $cargo_features
         # The same end-to-end leg the pipeline runs: a release binary, executed, then
         # checked for a dynamic fdk-aac dependency it must not have — and for a C++ runtime
         # dependency the MANIFEST says it should not need.
-        cargo build --offline --release --workspace
+        cargo build --offline --release --workspace $cargo_features
         ./target/docker-${platform##*/}/release/fdk-aac-e2e | tail -4
         ./check-static.sh ./target/docker-${platform##*/}/release/fdk-aac-e2e
 
@@ -125,14 +131,26 @@ for entry in "${targets[@]}"; do
     code=$?
     status=1
     echo "--- $target FAILED (exit $code)" >&2
-    # emulation: 132 is SIGILL. On Apple silicon with Rosetta handling linux/amd64, AVX2 is
-    # unimplemented, so the *correctly built* x86-64-v3 archive dies here while a baseline
-    # one would pass. That is the emulator's limit, not a bad artifact — confirm on a real
-    # x86_64 machine, or in the GitHub Actions run, before chasing it.
+    # 132 is SIGILL, and what it means depends on the flavour. The -v3 archive requires
+    # AVX2, which Rosetta does not implement, so on Apple silicon a *correct* linux-x86_64-v3
+    # dies here while QEMU runs it. The baseline archive must never SIGILL, emulated or not —
+    # every emulator implements SSE2 — so a 132 there means an instruction above the baseline
+    # got into the archive despite build.sh's check, or the e2e binary itself was built with
+    # a floor. That one is a real finding, not the emulator's.
     if [ "$code" = 132 ] && [ "$platform" = linux/amd64 ]; then
-      echo "    SIGILL under emulation. linux-x86_64 is built to an AVX2 floor and Rosetta" >&2
-      echo "    does not implement AVX2. Disable 'Use Rosetta for x86/amd64' in Docker" >&2
-      echo "    Desktop to fall back to QEMU, which does." >&2
+      case "$target" in
+        *-v3)
+          echo "    SIGILL under emulation. $target requires AVX2 and Rosetta does not" >&2
+          echo "    implement it. Disable 'Use Rosetta for x86/amd64' in Docker Desktop to" >&2
+          echo "    fall back to QEMU, which does, or confirm on a real x86_64 machine." >&2
+          ;;
+        *)
+          echo "    SIGILL. $target is built to the x86-64 baseline, so this is not an" >&2
+          echo "    emulator limit: look for an instruction above SSE2 in the archive" >&2
+          echo "    (objdump -d dist/$target/lib/libfdk-aac.a | grep -E '\\sv[a-z]') or a" >&2
+          echo "    RUSTFLAGS target-cpu on the e2e binary." >&2
+          ;;
+      esac
     fi
   fi
 done

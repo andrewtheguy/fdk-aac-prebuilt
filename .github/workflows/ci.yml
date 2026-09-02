@@ -4,19 +4,19 @@ name: CI
 #
 # The distinction is what changes commit to commit. The *archives* change only when
 # fdk-aac.env or build.sh does — a deliberate act, followed by a deliberate `build.yml` run
-# — so rebuilding four of them on every push would be four runners proving that a pinned
+# — so rebuilding six of them on every push would be six runners proving that a pinned
 # tarball is still pinned. The *Rust crates, the generated files and the shell scripts*
 # change constantly, and nothing would check them unless somebody remembered to press a
 # button.
 #
-# So: one x86_64 pair rather than all four targets, plus the checks that need no compiler,
+# So: the x86_64 Linux pair rather than all six targets, plus the checks that need no compiler,
 # plus the one path a normal build here never takes.
 #
 # **Two jobs here need a published release and will fail on a repository that has not cut
 # one yet: `leaks` and `consumer-fetch`.** Both resolve their archive by downloading it, and
 # that is deliberate in both cases — `leaks` should be measuring the artifact consumers
 # actually link, and `consumer-fetch` exists precisely to exercise the download path. The
-# bootstrap order is therefore: run `build.yml` by hand to check the four targets compile,
+# bootstrap order is therefore: run `build.yml` by hand to check the six targets compile,
 # then `release.yml` to publish, and CI is green from that commit onwards. Every other job
 # here is self-contained.
 on:
@@ -43,7 +43,7 @@ jobs:
                         crates/fdk-aac-prebuilt-sys/gen-bindings.sh \
                         crates/fdk-aac-prebuilt-sys/gen-version.sh
       # The comparison script decides whether a release happens, so a syntax error in it must
-      # not wait until four archives have been built to surface.
+      # not wait until six archives have been built to surface.
       - name: compare-targets.py parses
         run: python3 -m py_compile compare-targets.py
 
@@ -103,19 +103,21 @@ jobs:
       - run: cargo clippy --offline --workspace --all-targets -- -D warnings
 
   # The real gate: build an archive, link the crates against it, run the tests and the
-  # end-to-end binary. x86_64 rather than arm64 because it is the target whose floor is a
-  # deliberate exclusion — a wrong answer there is an illegal instruction on somebody's
-  # machine, where on arm64 it would only be a slower library.
+  # end-to-end binary. x86_64 rather than arm64 because it is the target where a wrong
+  # answer is an illegal instruction on somebody's machine — a floor that leaked into an
+  # archive with no runtime dispatch — where on arm64 it would only be a slower library. It
+  # is build.sh's disassembly check, run here, that catches that; the runner's own CPU has
+  # AVX2 and would execute a leaked floor without complaint. The group holds both x86_64
+  # flavours, so build.yml's compare job runs too and asserts their bitstreams are identical.
   #
   # Calling build.yml rather than repeating it means CI, the manual test loop and the release
   # all exercise the same code, with no CI-only build to drift.
   #
-  # One target means build.yml's `compare` job skips itself, which is correct and is the
-  # reason that job takes an expected count from `plan` rather than guarding on "at least two
-  # digest files". The earlier guard could not tell a deliberately narrowed matrix from a
-  # matrix whose other targets had died, so it failed both — and since this job has always
-  # passed `x86_64`, CI could never go green. Cross-target agreement is asserted where there
-  # is more than one target to compare: a manual `build.yml` run, and every release.
+  # build.yml's `compare` job takes an expected count from `plan` rather than guarding on
+  # "at least two digest files", because the earlier guard could not tell a deliberately
+  # narrowed matrix from a matrix whose other targets had died, and failed both. With the
+  # x86_64 group at two targets the job runs here as well; the full cross-architecture
+  # comparison still happens only on a manual `build.yml` run and on every release.
   archives:
     uses: ./.github/workflows/build.yml
     with:
@@ -175,7 +177,7 @@ jobs:
 
   # Leak checking on the one platform that has `leaks` — macOS. The other two legs live
   # elsewhere: valgrind runs under `test-docker.sh` on Linux, and the e2e binary's own RSS
-  # churn check runs on all four targets, Windows included.
+  # churn check runs on every target, Windows included.
   #
   # `leaks` rather than a Rust allocator hook, because fdk-aac allocates with C `malloc`
   # through libSYS. A `GlobalAlloc` counter sees only Rust-side allocation and would report

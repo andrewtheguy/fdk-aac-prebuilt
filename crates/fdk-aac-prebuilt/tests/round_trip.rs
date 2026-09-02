@@ -11,8 +11,10 @@
 //! question for the pipeline, where real archives can be compared against each other, rather
 //! than for a checked-in digest that has to be regenerated whenever the pinned version moves.
 //! See the `compare` job in `.github/workflows/build.yml` — which is also where it is
-//! recorded that fdk-aac is *not* bit-identical across architectures, because it swaps in
-//! x86-specific fixed-point primitives that round differently from the generic C ones.
+//! recorded that fdk-aac is *not* bit-identical across architectures: each architecture
+//! overrides a few of the generic routines with its own — A64 inline assembly on arm64, and
+//! on x86 an `imul` plus four routines that compute in `float` and truncate back to fixed
+//! point — and the two sets round differently.
 //!
 //! So: measures, with floors that travel with the signal. The floors sit well below what is
 //! actually observed — the numbers each test prints are the real ones — because a threshold

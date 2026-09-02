@@ -12,6 +12,12 @@
 //   3. the repository's **latest** GitHub release, downloaded once per machine into
 //      `$CARGO_HOME/fdk-aac-prebuilt/`.
 //
+// On x86_64 there are two archives per platform, and which one this links is a cargo
+// feature: `x86-64-v3` picks the flavour built to that floor, and the default is the one
+// built to the x86-64 baseline. A feature rather than an environment variable because the
+// choice belongs to whoever builds the *binary*, in a manifest, where it is reviewed and
+// reproducible — not to a shell that happened to have something exported.
+//
 // (3) is what makes a fresh clone of a consuming project build with nothing installed;
 // (1) is what makes it work with no network at all.
 //
@@ -49,8 +55,9 @@ fn main() {
     let target = std::env::var("TARGET").unwrap();
     let version = fdk_env(&manifest, "FDK_AAC_VERSION");
     println!("cargo:rustc-env=FDK_AAC_PREBUILT_VERSION={version}");
+    let flavour = flavour(&target);
 
-    let (prefix, provenance) = resolve(&manifest, &target, &version);
+    let (prefix, provenance) = resolve(&manifest, &target, flavour, &version);
     let lib_dir = prefix.join("lib");
     let archive = if target.contains("windows-msvc") { "fdk-aac.lib" } else { "libfdk-aac.a" };
     assert!(
@@ -263,12 +270,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
     h.iter().map(|word| format!("{word:08x}")).collect()
 }
 
-fn resolve(manifest: &Path, target: &str, version: &str) -> (PathBuf, String) {
+fn resolve(manifest: &Path, target: &str, flavour: Flavour, version: &str) -> (PathBuf, String) {
     if let Some(dir) = std::env::var_os("FDK_AAC_PREBUILT_DIR") {
         return (PathBuf::from(dir), "FDK_AAC_PREBUILT_DIR".into());
     }
 
-    let name = prebuilt_dir(target);
+    let name = prebuilt_dir(target, flavour);
     let local = manifest.join("prebuilt").join(name);
     if local.join("lib").is_dir() {
         return (local, format!("prebuilt/{name}"));
@@ -403,18 +410,48 @@ fn cache_root() -> PathBuf {
     home.join("fdk-aac-prebuilt")
 }
 
+/// Which x86_64 archive the consumer asked for. Decided once, up front, so that the
+/// `cargo:info` line about it appears whether or not the archive then resolves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Flavour {
+    Baseline,
+    V3,
+}
+
+fn flavour(target: &str) -> Flavour {
+    // Cargo exposes an enabled feature as `CARGO_FEATURE_<NAME>`, upper-cased with `-`
+    // mapped to `_`; there is no rerun-if-env-changed to declare for it, because a feature
+    // change already changes the build script's own fingerprint.
+    if std::env::var_os("CARGO_FEATURE_X86_64_V3").is_none() {
+        return Flavour::Baseline;
+    }
+    if target.starts_with("x86_64-") {
+        return Flavour::V3;
+    }
+    // Not a warning: a workspace that enables the feature and also builds for arm64 would
+    // otherwise see it on every arm64 build, and there is nothing to act on — the feature
+    // asks for a floor above the baseline, and on this target there is no such archive.
+    println!(
+        "cargo:info=fdk-aac x86-64-v3 feature has no effect on {target}; linking its only archive"
+    );
+    Flavour::Baseline
+}
+
 /// The repo's target names are not Rust triples — they name *artifacts*, and several triples
 /// map to one artifact.
-fn prebuilt_dir(target: &str) -> &'static str {
+fn prebuilt_dir(target: &str, flavour: Flavour) -> &'static str {
     // musl shares the glibc archive, and that is safe here for a reason worth stating rather
     // than assuming: `build.sh` measures the archive's undefined symbols and finds it needs
     // no C++ runtime, so nothing in it drags in libstdc++ — and its only libc use is malloc,
     // free and memcpy through libSYS/genericStds. A C++ archive that *did* need libstdc++
     // could not be linked into a musl binary, and this mapping would have to go.
+    let v3 = flavour == Flavour::V3;
     match target {
         "aarch64-apple-darwin" => "macos-arm64",
+        "x86_64-unknown-linux-gnu" | "x86_64-unknown-linux-musl" if v3 => "linux-x86_64-v3",
         "x86_64-unknown-linux-gnu" | "x86_64-unknown-linux-musl" => "linux-x86_64",
         "aarch64-unknown-linux-gnu" | "aarch64-unknown-linux-musl" => "linux-aarch64",
+        "x86_64-pc-windows-msvc" if v3 => "windows-x86_64-msvc-v3",
         "x86_64-pc-windows-msvc" => "windows-x86_64-msvc",
         "x86_64-apple-darwin" => panic!(
             "no prebuilt fdk-aac for Intel macOS: the macOS artifact is arm64, tuned for \

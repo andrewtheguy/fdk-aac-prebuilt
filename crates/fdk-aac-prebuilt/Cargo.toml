@@ -19,5 +19,9 @@ publish = false
 name = "fdk_aac"
 path = "src/lib.rs"
 
+[features]
+# Forwarded to the -sys crate, which is where the archive gets chosen. See its Cargo.toml.
+x86-64-v3 = ["fdk-aac-prebuilt-sys/x86-64-v3"]
+
 [dependencies]
 fdk-aac-prebuilt-sys = { path = "../fdk-aac-prebuilt-sys" }
