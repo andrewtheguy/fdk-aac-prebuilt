@@ -107,9 +107,10 @@ jobs:
           cargo test --offline --workspace
 
       # The end-to-end leg: a release binary that is a *consumer* of the crate, executed on
-      # the runner's own processor. This is where the CPU floor stops being a claim in a
-      # MANIFEST — an AVX2 archive that cannot run fails here — and it is the only place
-      # Windows gets exercised at all, since neither Docker nor a Mac can do it.
+      # the runner's own processor. It is the only place Windows gets exercised at all, since
+      # neither Docker nor a Mac can do it. Note what it does not prove on x86_64: the
+      # runners have AVX2, so a floor that leaked into the archive would run fine here and
+      # SIGILL on an older machine — that is what build.sh's disassembly check is for.
       - name: End to end — encode and decode in a real binary
         shell: bash
         run: |
@@ -146,15 +147,18 @@ jobs:
   # This replaces a `bit-exact` job that required all four to encode byte-identical
   # bitstreams. That assertion was false, and the first CI run on this repository disproved
   # it: the two arm64 targets matched each other exactly while linux-x86_64 differed on every
-  # configuration. Not a miscompile. On x86, fdk-aac's `fixmul.h` and `fixpoint_math.h`
-  # include `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h`, which replace `sqrtFixp`,
-  # `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with x86-specific
-  # implementations; aarch64 uses the generic C ones. Different algorithms round differently,
-  # so the encoder makes slightly different quantisation decisions. Upstream ships it that way
-  # on purpose.
+  # configuration. Not a miscompile. Each architecture replaces fdk-aac's generic fixed-point
+  # routines with its own: on x86, `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h` supply an
+  # `imul` and float-based `sqrtFixp`, `invSqrtNorm2`, `invFixp` and `schur_div`; on aarch64
+  # — which `FDK_archdef.h` maps to `__arm__` plus `__ARM_ARCH_8__` — the `arm/` headers
+  # supply A64 inline assembly for the multiplies, `cplxMultDiv2` and `clz`. The two sets
+  # round differently from each other, so the encoder makes slightly different quantisation
+  # decisions. Upstream ships it that way on purpose.
   #
-  # Nor is it floating point, which is the obvious suspect and is innocent: rebuilding
-  # linux-x86_64 with `-ffp-contract=off` changes not one digest.
+  # It is not floating-point nondeterminism, the obvious suspect: the x86 routines are float,
+  # but IEEE sqrt and division are correctly rounded, so MSVC and GCC agree to the byte, and
+  # rebuilding linux-x86_64 with `-ffp-contract=off` — or at the baseline instead of
+  # x86-64-v3 — changes not one digest.
   #
   # So the four are compared at the three strengths they actually agree at — structure
   # exactly, size within a tolerance, decoded audio as an SNR and a correlation, and digests

@@ -103,9 +103,11 @@ jobs:
       - run: cargo clippy --offline --workspace --all-targets -- -D warnings
 
   # The real gate: build an archive, link the crates against it, run the tests and the
-  # end-to-end binary. x86_64 rather than arm64 because it is the target whose floor is a
-  # deliberate exclusion — a wrong answer there is an illegal instruction on somebody's
-  # machine, where on arm64 it would only be a slower library.
+  # end-to-end binary. x86_64 rather than arm64 because it is the target where a wrong
+  # answer is an illegal instruction on somebody's machine — a floor that leaked into an
+  # archive with no runtime dispatch — where on arm64 it would only be a slower library. It
+  # is build.sh's disassembly check, run here, that catches that; the runner's own CPU has
+  # AVX2 and would execute a leaked floor without complaint.
   #
   # Calling build.yml rather than repeating it means CI, the manual test loop and the release
   # all exercise the same code, with no CI-only build to drift.

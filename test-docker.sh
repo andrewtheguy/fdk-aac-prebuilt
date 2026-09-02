@@ -125,14 +125,16 @@ for entry in "${targets[@]}"; do
     code=$?
     status=1
     echo "--- $target FAILED (exit $code)" >&2
-    # emulation: 132 is SIGILL. On Apple silicon with Rosetta handling linux/amd64, AVX2 is
-    # unimplemented, so the *correctly built* x86-64-v3 archive dies here while a baseline
-    # one would pass. That is the emulator's limit, not a bad artifact — confirm on a real
-    # x86_64 machine, or in the GitHub Actions run, before chasing it.
+    # 132 is SIGILL, and with linux-x86_64 built to the x86-64 baseline it is never expected,
+    # emulated or not — every emulator implements SSE2. When this archive was built to
+    # x86-64-v3, Rosetta's missing AVX2 made a correct artifact die here; now a 132 means an
+    # instruction above the baseline got into the archive despite build.sh's check, or the
+    # e2e binary itself was built with a floor. Either is a real finding, not the emulator's.
     if [ "$code" = 132 ] && [ "$platform" = linux/amd64 ]; then
-      echo "    SIGILL under emulation. linux-x86_64 is built to an AVX2 floor and Rosetta" >&2
-      echo "    does not implement AVX2. Disable 'Use Rosetta for x86/amd64' in Docker" >&2
-      echo "    Desktop to fall back to QEMU, which does." >&2
+      echo "    SIGILL. linux-x86_64 is built to the x86-64 baseline, so this is not an" >&2
+      echo "    emulator limit: look for an instruction above SSE2 in the archive" >&2
+      echo "    (objdump -d dist/linux-x86_64/lib/libfdk-aac.a | grep -E '\\sv[a-z]') or a" >&2
+      echo "    RUSTFLAGS target-cpu on the e2e binary." >&2
     fi
   fi
 done

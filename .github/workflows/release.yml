@@ -203,12 +203,15 @@ jobs:
 
           ## CPU floors
 
-          The \`x86_64\` archives are built to **x86-64-v3 (AVX2, Coffee Lake or newer)**,
-          matching \`libopus-prebuilt\` so that a project linking both gains no exclusion it
-          did not already have. fdk-aac ships no x86 SIMD kernels of its own — it is
-          fixed-point integer code — so what the floor buys is autovectorisation of the scalar
-          loops rather than hand-written paths. A project that needs to run below it should
-          build its own and point \`FDK_AAC_PREBUILT_DIR\` at the prefix.
+          The \`x86_64\` archives have **no floor above the x86-64 baseline** and run on any
+          x86-64. fdk-aac has no runtime CPU dispatch of its own — no CPUID, no SIMD kernels —
+          so, unlike \`libopus-prebuilt\`, there is nothing to select at run time and the
+          baseline is the only build that runs everywhere. What a Coffee Lake floor used to
+          add was autovectorisation of the scalar loops with AVX2 instead of SSE2, measured at
+          five to ten percent of about one percent of a core, with identical output bytes.
+          \`build.sh\` asserts the linux-x86_64 archive contains no AVX instruction at all.
+          A project that wants the floor back should build its own and point
+          \`FDK_AAC_PREBUILT_DIR\` at the prefix.
           \`macos-arm64\` is built for \`apple-m1\`, which every arm64 Mac satisfies;
           \`linux-aarch64\` is baseline ARMv8-A.
 

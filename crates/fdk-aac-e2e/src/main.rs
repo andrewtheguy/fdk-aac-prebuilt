@@ -7,8 +7,10 @@
 //! - the static archive links into a shippable executable, in release mode, with no
 //!   libfdk-aac anywhere on the system and nothing to install (`check-static.sh` asserts the
 //!   linkage is static and that no C++ runtime crept in, rather than assuming either);
-//! - the CPU floor is real — this runs on the runner's own processor, so an archive built
-//!   for AVX2 that cannot execute is a failed pipeline rather than a support ticket;
+//! - the archive executes at all on the runner's own processor — which, since the x86_64
+//!   archives are built to the baseline and the runners have AVX2, proves less about the CPU
+//!   floor than it used to; `build.sh`'s disassembly check is what proves no instruction
+//!   above the baseline got in;
 //! - Windows works at all, which is the one target that cannot be built or run anywhere
 //!   else in this repository.
 //!
@@ -35,20 +37,25 @@
 //! # Why not one digest comparison across all four
 //!
 //! Because fdk-aac is not the uniform fixed-point integer code it is usually described as,
-//! and this repository asserted that it was until CI disproved it. On x86, `fixmul.h` and
-//! `fixpoint_math.h` include `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h`, which replace
-//! `sqrtFixp`, `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with x86-specific
-//! implementations. aarch64 uses the generic C ones — the `arm/` headers hold 32-bit ARM
-//! inline assembly that is inactive on aarch64. Different algorithms for the same function
-//! round differently, the encoder makes slightly different quantisation decisions, and the
-//! bitstream differs. By design, in upstream, and not a miscompile.
+//! and this repository asserted that it was until CI disproved it. Each architecture replaces
+//! the generic fixed-point routines with its own. On x86, `fixmul.h` and `fixpoint_math.h`
+//! include `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h`: an inline `imul`, and
+//! `sqrtFixp`, `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` computed in
+//! `float`. On aarch64 — which `FDK_archdef.h` maps to `__arm__` plus `__ARM_ARCH_8__`, a
+//! detail this comment used to get backwards — the `arm/` headers supply A64 inline assembly
+//! for the multiplies, `cplxMultDiv2` and `clz`. The two sets round differently from each
+//! other (`fixmul_DD` is `(a·b) >> 31` on aarch64 and `((a·b) >> 32) << 1` on x86), the
+//! encoder makes slightly different quantisation decisions, and the bitstream differs. By
+//! design, in upstream, and not a miscompile.
 //!
-//! Neither floating point nor the CPU floors do this, which is worth recording because both
-//! are the obvious suspects and both are innocent. `-ffp-contract=off` on the x86-64-v3 build
-//! changes not one digest. And the four targets split strictly by architecture rather than by
-//! toolchain: MSVC at `/arch:AVX2` matches GCC at `-march=x86-64-v3` byte for byte, Apple
-//! clang at `-mcpu=apple-m1` matches GCC at no floor at all, and it is the same GCC across
-//! two architectures that disagrees. Lowering a floor would cost speed and fix nothing.
+//! Neither floating-point nondeterminism nor the CPU floors do this, which is worth recording
+//! because both are the obvious suspects and both are innocent. The x86 routines are float,
+//! but IEEE sqrt and division are correctly rounded and nothing in them contracts to an FMA:
+//! `-ffp-contract=off` changes not one digest, and neither does building linux-x86_64 at the
+//! baseline instead of x86-64-v3. And the four targets split strictly by architecture rather
+//! than by toolchain: MSVC at `/arch:AVX2` matched GCC at `-march=x86-64-v3` byte for byte
+//! and GCC at the baseline matches both, Apple clang at `-mcpu=apple-m1` matches GCC at no
+//! floor at all, and it is the same GCC across two architectures that disagrees.
 //!
 //! Nothing is compared against a *stored* value. A checked-in expected digest would have to be
 //! regenerated every time the pinned fdk-aac moves, and only ever from whichever machine

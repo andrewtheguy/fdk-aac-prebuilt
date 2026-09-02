@@ -3,21 +3,25 @@
 
 Replaces an earlier `bit-exact` job that required all four targets to encode byte-identical
 bitstreams. That assertion was false and CI proved it on the first run: fdk-aac is usually
-described as fixed-point integer code throughout, but on x86 `fixmul.h` and
-`fixpoint_math.h` pull in `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h`, replacing
-`sqrtFixp`, `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with x86-specific
-implementations. aarch64 uses the generic C ones. Different algorithms round differently, the
-encoder makes slightly different quantisation decisions, and the bitstream differs — by
-design, upstream, not a miscompile.
+described as fixed-point integer code throughout, but each architecture replaces the generic
+routines with its own. On x86, `fixmul.h` and `fixpoint_math.h` pull in `x86/fixmul_x86.h`
+and `x86/fixpoint_math_x86.h`: an inline `imul`, and `sqrtFixp`, `invSqrtNorm2`, both
+overloads of `invFixp` and `schur_div` computed in `float`. On aarch64 — which
+`FDK_archdef.h` maps to `__arm__` plus `__ARM_ARCH_8__` — the `arm/` headers supply A64
+inline assembly for the multiplies, `cplxMultDiv2` and `clz` (an earlier version of this
+docstring said aarch64 ran the generic C; it does not). The two sets round differently from
+each other, the encoder makes slightly different quantisation decisions, and the bitstream
+differs — by design, upstream, not a miscompile.
 
 Two things it is emphatically not, both worth knowing before anyone proposes turning an
-optimization off to make the numbers agree. It is not floating point: `-ffp-contract=off` on
-the x86-64-v3 build changes not one digest. And it is not the CPU floors, which the full
-matrix settles — `windows-x86_64-msvc` built by MSVC at `/arch:AVX2` is byte-identical to
-`linux-x86_64` built by GCC at `-march=x86-64-v3`, and `macos-arm64` at `-mcpu=apple-m1` is
+optimization off to make the numbers agree. It is not floating-point nondeterminism: the x86
+routines are float, but IEEE sqrt and division are correctly rounded, and `-ffp-contract=off`
+changes not one digest. And it is not the CPU floors, which the full matrix settles —
+`windows-x86_64-msvc` built by MSVC at `/arch:AVX2` was byte-identical to `linux-x86_64`
+built by GCC at `-march=x86-64-v3`, and `linux-x86_64` rebuilt at the x86-64 baseline (which
+is how it is built now) encodes the same bytes again; `macos-arm64` at `-mcpu=apple-m1` is
 byte-identical to `linux-aarch64` at no floor at all, while the same GCC across the two
-architectures differs. The boundary is the architecture, so lowering a floor would cost speed
-and change nothing.
+architectures differs. The boundary is the architecture.
 
 So the targets are compared at the strength they actually agree at, which is three different
 strengths and is why this is a script rather than a `diff`:

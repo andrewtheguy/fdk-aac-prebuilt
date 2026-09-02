@@ -7,9 +7,14 @@ links it.
 | target | library | CPU floor |
 |---|---|---|
 | `macos-arm64` | `libfdk-aac.a` | `apple-m1`, deployment target 11.0 |
-| `linux-x86_64` | `libfdk-aac.a` | **x86-64-v3 / Coffee Lake** |
+| `linux-x86_64` | `libfdk-aac.a` | x86-64 baseline — no floor above SSE2 |
 | `linux-aarch64` | `libfdk-aac.a` | ARMv8-A baseline |
-| `windows-x86_64-msvc` | `fdk-aac.lib` | **`/arch:AVX2` / Coffee Lake**, dynamic CRT |
+| `windows-x86_64-msvc` | `fdk-aac.lib` | x86-64 baseline, dynamic CRT |
+
+The x86_64 archives run on any x86-64. fdk-aac has no runtime CPU dispatch of its own — no
+CPUID, no SIMD kernels to select — so unlike `libopus-prebuilt`, which keeps opus's dispatch
+and still runs its AVX2 kernels where the CPU has them, the only way to build one archive that
+runs everywhere is to build to the baseline. What that costs, measured, is under **CPU floors**.
 
 ## Why
 
@@ -21,9 +26,10 @@ publishes the archives; a consumer's build script then finds one and emits two l
 Three things fall out of doing it that way, and the third was a surprise:
 
 - no C++ compiler, no cmake, no autotools in any consuming project;
-- the archives are checked — fixed-point code compiled to a stated CPU floor, reproducible
-  across runners (on the toolchains that can be, see below), and byte-identical in what they
-  *encode* across all four targets (see **Bit-exactness** below);
+- the archives are checked — compiled to a stated CPU floor and, on x86_64, disassembled to
+  prove no instruction above it got in; reproducible across runners (on the toolchains that
+  can be, see below); and byte-identical in what they *encode* across targets of the same
+  architecture (see **How far the four targets agree** below);
 - **no C++ runtime dependency either.** `build.sh` inspects each archive's undefined symbols
   and finds none from the C++ ABI — fdk-aac is C written in `.cpp` files, and cmake builds it
   with `-fno-exceptions -fno-rtti` — so `build.rs` emits no `-lstdc++`. `fdk-aac-sys` emits
@@ -94,7 +100,7 @@ for free. To confirm which one was used:
 ```sh
 cargo build -vv 2>&1 | grep 'cargo:info=fdk-aac'
 # cargo:info=fdk-aac 2.0.3 linked statically from prebuilt/linux-x86_64 (x86_64-unknown-linux-gnu)
-# cargo:info=fdk-aac cpu_floor x86-64-v3 / Coffee Lake (AVX2+FMA permitted)
+# cargo:info=fdk-aac cpu_floor x86-64 baseline (SSE2; fdk-aac has no runtime dispatch, so nothing above it is used)
 # cargo:info=fdk-aac cxx_runtime none
 ```
 
@@ -108,23 +114,55 @@ one sentence naming the file. The checksum that constrains somebody *other than 
 
 ### CPU floors
 
-The x86_64 archives are built to **x86-64-v3 — AVX2, Coffee Lake or newer**, matching
-`libopus-prebuilt` so that a project linking both gains no exclusion it did not already have.
-Stated plainly, the cost is that they may execute an illegal instruction on anything without
-AVX2: pre-2013 Intel, pre-Zen AMD, and the Celeron and Pentium parts *of* the Coffee Lake
-generation, where AVX2 is fused off.
+The x86_64 archives have **no floor above the x86-64 baseline**. They were built to x86-64-v3
+— AVX2, Coffee Lake or newer, matching `libopus-prebuilt` at the time — until a binary linking
+that repository's archive died on the first AVX2 instruction on an Ivy Bridge i5-3210M. Both
+repositories dropped the floor for the same reason: an archive that is merely slower is a
+number in a MANIFEST, and one that SIGILLs is a support call from whoever runs the oldest
+machine.
 
-What the floor buys here is less than it buys for Opus, and the difference is worth stating
-rather than glossing. opus ships hand-written SSE4.1 and AVX2 kernels, and the flag decides
-whether they are *called*. fdk-aac ships no x86 SIMD at all — it is fixed-point integer code,
-and its hand-written assembly is 32-bit ARM only, guarded on `__arm__` and `__ARM_ARCH_8__`,
-so none of it applies on aarch64 either. All the floor can do is let the compiler
-autovectorise the scalar loops. `build.sh` records how many AVX instructions ended up in the
-archive as MANIFEST evidence rather than asserting a threshold, because with no hand-written
-kernels there is no number anything guarantees.
+What replaced the floor there cannot be replicated here, and the difference is worth stating
+rather than glossing. opus compiles its SSE4.1 and AVX2 kernels per file and selects one by
+CPUID at run time, so libopus-prebuilt lost nothing by dropping its `-march`: a Coffee Lake
+still runs the AVX2 kernels. fdk-aac has no such mechanism to keep. There is no CPUID query,
+no function multiversioning and no SIMD kernel anywhere in it; its per-architecture code is a
+handful of *scalar* overrides — on x86 an inline `imul` for the fixed-point multiply and four
+float-based math routines, on ARM inline assembly for the multiplies and `clz` (see the next
+section, which this file used to get wrong). So the only thing a floor ever decided here was
+which instructions the compiler's **autovectorizer** could use for the scalar loops, and the
+only way to build one archive that runs on every x86-64 is the baseline. It still vectorizes
+at the baseline: SSE2 is part of x86-64, and the linux-x86_64 MANIFEST records 10,918 SSE2
+packed-integer instructions where the x86-64-v3 archive had 23,589 AVX ones.
 
-A project that needs to run below the floor should build its own and point
-`FDK_AAC_PREBUILT_DIR` at the prefix.
+What AVX2 autovectorization was buying was measured before it was dropped — an i5-8500T,
+60 s of 48 kHz stereo, afterburner on, best of three runs, twice:
+
+| configuration | x86-64-v3 | baseline | output |
+|---|---|---|---|
+| AAC-LC 128 kbps | 0.97–1.01% of a core | 1.07% | identical bytes |
+| HE-AAC 64 kbps | 1.60% | 1.66–1.70% | identical bytes |
+| HE-AAC v2 32 kbps | 0.92% | 0.97–0.98% | identical bytes |
+
+Five to ten percent slower, of roughly one percent of a core. That is the whole price of an
+archive that runs everywhere, and the seven e2e digests are byte-identical between the two
+builds as well. A project that wants it back should build its own and point
+`FDK_AAC_PREBUILT_DIR` at the prefix, and will then exclude pre-2013 Intel, pre-Zen AMD, and
+the Celeron and Pentium parts *of* the Coffee Lake generation, where AVX2 is fused off.
+
+`build.sh` asserts the property rather than trusting the script that is supposed to produce
+it. The cmake cache must carry no `-march`, `-mcpu`, `-mtune` or `/arch:` — the flags are
+passed explicitly even when empty, so a `CXXFLAGS=-march=native` in the runner's environment
+cannot seed them — and on Linux the disassembled archive must contain **no AVX instruction at
+all**, by mnemonic, since with no dispatch one is one machine it will not run on. The first
+run of that check caught the build directory's stale cache still holding `-march=x86-64-v3`
+from the previous build, which cmake had kept and reported `[100%] Built target` on without
+compiling a file; `build.sh` now starts from a clean build directory. Windows has no
+disassembler on the runner and the runner's own CPU has AVX2, so the cache check is what
+covers that target, and its MANIFEST says so.
+
+`macos-arm64` is built for `apple-m1`, which every arm64 Mac satisfies, and `linux-aarch64` is
+baseline ARMv8-A: arm64 Linux spans a decade of very different cores, NEON is mandatory in
+ARMv8-A anyway, and fdk-aac has nothing above the baseline to unlock.
 
 Two things this does *not* do, both on purpose: `-march=native` (the artifact runs on machines
 other than the builder) and any fast-math flag (it would change the codec's arithmetic, and
@@ -156,15 +194,34 @@ integer code throughout, from which it follows that every target should encode i
 bytes. The first pipeline run disproved it: `macos-arm64` and `linux-aarch64` matched each
 other exactly, and `linux-x86_64` differed on all seven configurations.
 
-It is not a miscompile, not floating point, and **not the optimization flags**. On x86,
-`fixmul.h` and `fixpoint_math.h` include `x86/fixmul_x86.h` and `x86/fixpoint_math_x86.h`,
-which replace `sqrtFixp`, `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with
-x86-specific implementations. aarch64 uses the generic C versions, the `arm/` headers holding
-only 32-bit ARM inline assembly. Different algorithms for the same function round differently,
-the encoder makes marginally different quantisation decisions, and the bitstream differs.
+It is not a miscompile and **not the optimization flags** — the matrix below settles that. It
+is fdk-aac's per-architecture arithmetic, and an earlier version of this file, and of the
+pipeline's comments, had half of that wrong. They said the `arm/` headers held only 32-bit ARM
+assembly and that aarch64 ran the generic C. Neither is true: `FDK_archdef.h` defines
+`__arm__` *and* `__ARM_ARCH_8__` from `__aarch64__`, and under those two macros the `arm/`
+headers carry dedicated A64 inline assembly — `smull`/`asr` for `fixmuldiv2_DD` and
+`fixmul_DD`, `smaddl`/`smsubl` for `cplxMultDiv2`, `clz` for `fixnormz_D` — plus
+`#if defined(__arm__)` paths in nine `.cpp` files, all of them live on both arm64 targets. On x86, `fixmul_x86.h` supplies an `imul` and `fixpoint_math_x86.h` replaces
+`sqrtFixp`, `invSqrtNorm2`, both overloads of `invFixp` and `schur_div` with implementations
+that go through `float` — `sqrtf`, `1.0/sqrt`, `frexpf`/`ldexpf` — and truncate back to fixed
+point.
 
-The full matrix says this cleanly, and it is worth reading carefully before anyone proposes
-weakening a `-march` to make the numbers line up:
+Which corrects a second earlier claim, that the difference "is not floating point". Four of
+the x86 routines *are* computed in floating point. What the difference is not is floating-point
+**nondeterminism**: IEEE square root and division are correctly rounded, none of those four
+contains an `a*b+c` for FMA contraction to change, and x86-64 has no x87 excess precision —
+which is why MSVC and GCC agree to the byte, and why `-ffp-contract=off` changes nothing.
+
+So the two architectures each replace the generic routines with their own, and the two sets
+round differently from each other. `fixmul_DD` alone shows it: on aarch64 it is
+`(a·b) >> 31`, on x86 and in the generic C it is `((a·b) >> 32) << 1`, one bit apart whenever
+bit 31 of the product is set. Which of the overrides the divergence actually runs through was
+not isolated, and does not need to be — the encoder's quantisation decisions sit close enough
+to those bits that the bitstream differs, and the audio does not.
+
+The full matrix says this cleanly. It was measured while the x86_64 archives were still built
+to x86-64-v3, and rebuilding `linux-x86_64` at the baseline reproduces all seven digests,
+which is one more data point that the flags are innocent:
 
 ```
 arm64:   macos-arm64         ≡ linux-aarch64      (byte-identical)
@@ -172,12 +229,12 @@ x86_64:  windows-x86_64-msvc ≡ linux-x86_64       (byte-identical)
          arm64 ≠ x86_64
 ```
 
-The boundary is the **architecture**, not the toolchain. MSVC with `/arch:AVX2` and GCC with
-`-march=x86-64-v3` emit the same bitstream as each other despite sharing no optimizer; Apple
-clang with `-mcpu=apple-m1` and GCC with no floor at all likewise. Meanwhile the *same* GCC on
-two architectures disagrees. So the CPU floors cannot be what causes the difference, and
-dropping them would cost speed while changing nothing. Rebuilding `linux-x86_64` with
-`-ffp-contract=off` also changes not one digest, ruling out the other obvious suspect.
+The boundary is the **architecture**, not the toolchain. MSVC at `/arch:AVX2` and GCC at
+`-march=x86-64-v3` emitted the same bitstream as each other despite sharing no optimizer, and
+GCC at the baseline emits it again; Apple clang with `-mcpu=apple-m1` and GCC with no floor at
+all likewise. Meanwhile the *same* GCC on two architectures disagrees. So the CPU floors cannot
+be what causes the difference — they were dropped on x86_64 for a different reason, above, and
+not one digest moved. Rebuilding `linux-x86_64` with `-ffp-contract=off` also changes nothing.
 
 So `compare-targets.py` asserts each property at the strength it actually holds:
 
@@ -198,8 +255,9 @@ top octave from parameters rather than coding its waveform — at 29.4 dB it sti
 The digest comparison is scoped to one architecture because that is where it holds, and there
 it holds strongly — across compilers, across CPU floors, and across libraries that are not
 themselves identical. On x86_64, MSVC's archive and GCC's are byte-identical in what they
-encode while sharing no optimizer; on arm64, Apple clang's and GCC's are, one built to
-`-mcpu=apple-m1` and the other to no floor at all. The four runners are four different real
+encode while sharing no optimizer, and GCC's rebuilt at the baseline encodes the same bytes
+again; on arm64, Apple clang's and GCC's are, one built to `-mcpu=apple-m1` and the other to
+no floor at all. The four runners are four different real
 machines, which is why this is the evidence worth quoting: the archives differ, the bitstreams
 do not.
 
