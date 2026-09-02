@@ -160,10 +160,14 @@ on, best of three runs, twice:
 Five to ten percent, of roughly one percent of a core, and the seven e2e digests are
 byte-identical between the two flavours — the pipeline's compare job asserts that on every
 CI run, since both land in the same x86_64 digest group. A project that has measured its
-own workload and knows every machine it ships to has AVX2 can take it with one word in its
-manifest; the price is that the binary then excludes pre-2013 Intel, pre-Zen AMD, and the
-Celeron and Pentium parts *of* the Coffee Lake generation, where AVX2 is fused off. Anything
-else — `-march=native` for a fleet of identical machines, say — is still `FDK_AAC_PREBUILT_DIR`.
+own workload and knows every machine it ships to has the **whole** x86-64-v3 feature set can
+take it with one word in its manifest. AVX2 alone is not enough to check for: the archive is
+compiled with `-march=x86-64-v3`, which also licenses BMI1, BMI2, F16C, FMA, LZCNT and MOVBE,
+and the compiler uses whichever it likes — so a CPU or a VM that exposes AVX2 without, say,
+BMI2 can still take an illegal instruction. The price is that the binary then excludes pre-2013
+Intel, pre-Zen AMD, and the Celeron and Pentium parts *of* the Coffee Lake generation, where
+AVX2 is fused off. Anything else — `-march=native` for a fleet of identical machines, say — is
+still `FDK_AAC_PREBUILT_DIR`.
 
 `build.sh` asserts each flavour's property rather than trusting the script that is supposed
 to produce it, and the two assertions are opposites. For the baseline, the cmake cache must
