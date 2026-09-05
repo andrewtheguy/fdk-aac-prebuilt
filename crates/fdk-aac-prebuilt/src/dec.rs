@@ -229,11 +229,7 @@ impl Display for DecoderError {
 impl std::error::Error for DecoderError {}
 
 fn check(e: sys::AAC_DECODER_ERROR) -> Result<(), DecoderError> {
-    if e == sys::AAC_DECODER_ERROR_AAC_DEC_OK {
-        Ok(())
-    } else {
-        Err(DecoderError(e))
-    }
+    if e == sys::AAC_DECODER_ERROR_AAC_DEC_OK { Ok(()) } else { Err(DecoderError(e)) }
 }
 
 /// A decoder parameter, for [`Decoder::set_param`].

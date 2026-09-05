@@ -493,7 +493,7 @@ case "$target" in
               [ "$avx_count" -eq 0 ] || {
                 echo "AVX instructions in $lib_name — a floor leaked in. The archive would SIGILL" >&2
                 echo "on any CPU without them; by mnemonic:" >&2
-                echo "$avx" | sed 's/^/    /' >&2
+                awk '{ print "    " $0 }' <<<"$avx" >&2
                 exit 1
               }
               sse2="$(grep -cE '[[:space:]](p(add|sub|mul|madd|and|or|xor|unpck|shuf|srl|sll|sra|cmp|max|min)[a-z]*|movdq[au])[[:space:]]' \

@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{adts_frames, frequency_index, Adts};
+use common::{Adts, adts_frames, frequency_index};
 use fdk_aac::enc::*;
 
 /// Every sample rate a consumer is likely to use. 7350 and 96000 are left out: the former is
@@ -49,7 +49,7 @@ fn interleave(mono: &[i16], channels: usize) -> Vec<i16> {
     if channels == 1 {
         return mono.to_vec();
     }
-    mono.iter().flat_map(|&s| std::iter::repeat(s).take(channels)).collect()
+    mono.iter().flat_map(|&s| std::iter::repeat_n(s, channels)).collect()
 }
 
 /// Every rate × every channel mode, in ADTS, with the header checked against what was asked.

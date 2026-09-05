@@ -1,7 +1,8 @@
 [package]
 name = "fdk-aac-e2e"
 version.workspace = true
-edition = "2021"
+edition = "2024"
+rust-version = "1.90"
 description = "End-to-end check: a real binary that encodes and decodes AAC"
 publish = false
 

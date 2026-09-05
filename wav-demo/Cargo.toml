@@ -1,7 +1,8 @@
 [package]
 name = "wav-demo"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.90"
 
 # An empty [workspace] table detaches this from the repository's workspace, so it resolves
 # its own dependencies and cannot affect the crates that get released. It is here to be a

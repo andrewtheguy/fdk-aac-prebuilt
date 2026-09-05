@@ -18,7 +18,7 @@
 
 mod common;
 
-use common::{best_lag, to_f64, write_wav, Signal};
+use common::{Signal, best_lag, to_f64, write_wav};
 use fdk_aac::dec::{Decoder, DecoderError, Transport as DecTransport};
 use fdk_aac::enc::{
     AudioObjectType, BitRate, ChannelMode, Encoder, EncoderParams, Transport as EncTransport,
