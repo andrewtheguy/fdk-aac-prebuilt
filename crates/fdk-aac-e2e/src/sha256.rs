@@ -31,10 +31,10 @@ pub fn hex(bytes: &[u8]) -> String {
     }
     msg.extend_from_slice(&(bytes.len() as u64 * 8).to_be_bytes());
 
-    for block in msg.chunks_exact(64) {
+    for block in msg.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
-        for (word, src) in w.iter_mut().zip(block.chunks_exact(4)) {
-            *word = u32::from_be_bytes([src[0], src[1], src[2], src[3]]);
+        for (word, src) in w.iter_mut().zip(block.as_chunks::<4>().0) {
+            *word = u32::from_be_bytes(*src);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);

@@ -22,7 +22,7 @@
 
 mod common;
 
-use common::{best_lag, correlation, rms, to_f64, Signal};
+use common::{Signal, best_lag, correlation, rms, to_f64};
 use fdk_aac::dec::{Decoder, Transport as DecTransport};
 use fdk_aac::enc::{
     AudioObjectType, BitRate, ChannelMode, Encoder, EncoderParams, Transport as EncTransport,

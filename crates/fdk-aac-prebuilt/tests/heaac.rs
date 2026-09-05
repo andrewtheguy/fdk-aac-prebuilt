@@ -63,7 +63,7 @@ fn round_trip(
     let pcm: Vec<i16> = if channels == 1 {
         mono.samples
     } else {
-        mono.samples.iter().flat_map(|&s| std::iter::repeat(s).take(channels)).collect()
+        mono.samples.iter().flat_map(|&s| std::iter::repeat_n(s, channels)).collect()
     };
 
     let mut encoder = Encoder::new(params).expect("configuration must be encodable");

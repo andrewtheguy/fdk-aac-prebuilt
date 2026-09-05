@@ -74,11 +74,7 @@ impl Display for EncoderError {
 impl std::error::Error for EncoderError {}
 
 fn check(e: sys::AACENC_ERROR) -> Result<(), EncoderError> {
-    if e == sys::AACENC_ERROR_AACENC_OK {
-        Ok(())
-    } else {
-        Err(EncoderError(e))
-    }
+    if e == sys::AACENC_ERROR_AACENC_OK { Ok(()) } else { Err(EncoderError(e)) }
 }
 
 struct EncoderHandle {

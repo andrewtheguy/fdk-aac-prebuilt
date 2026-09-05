@@ -1,8 +1,8 @@
 [package]
 name = "fdk-aac-prebuilt"
 version.workspace = true
-edition = "2021"
-rust-version = "1.70"
+edition = "2024"
+rust-version = "1.90"
 description = "Safe Rust bindings for the Fraunhofer FDK AAC codec, linked from a prebuilt static archive"
 # The Rust in this crate descends from `fdk-aac` 0.8.0 by Hailey Somerville, which is MIT,
 # and stays MIT. That covers the *binding*; the codec it binds is under the Fraunhofer

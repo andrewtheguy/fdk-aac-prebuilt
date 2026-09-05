@@ -1,11 +1,8 @@
 [package]
 name = "fdk-aac-prebuilt-sys"
 version.workspace = true
-edition = "2021"
-# 2021, not 2024, and no MSRV-raising syntax: this crate's whole job is to be linkable from
-# other people's projects, so it should not be the thing that forces a toolchain upgrade on
-# any of them.
-rust-version = "1.70"
+edition = "2024"
+rust-version = "1.90"
 description = "Raw FFI for the Fraunhofer FDK AAC codec, linked from a prebuilt static archive — no C++ toolchain"
 # Not an SPDX licence, and not an oversight. The FDK AAC Codec Library licence is a
 # Fraunhofer source licence with a patent notice that grants no patent rights; it is not
