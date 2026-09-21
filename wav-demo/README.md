@@ -172,7 +172,7 @@ fdk-aac = { package = "fdk-aac-prebuilt", git = "https://github.com/andrewtheguy
 
 If you switch this directory to that form, **do not bump the tag on every release.** Nothing
 in CI builds this directory, an older tag still resolves, and `build.rs` fetches archives
-from the repository's *latest* release regardless of which tag the crate source came from —
-so a stale pin here demonstrates exactly what a current one would. Bumping it every time
-would mean a commit whose only content is a tag, which is the maintenance that
-`releases/latest/download/…` exists to avoid everywhere else.
+from the private archive repository's *latest* release regardless of which tag the crate
+source came from — so a stale pin here demonstrates exactly what a current one would. Bumping
+it every time would mean a commit whose only content is a tag, which is the maintenance that
+resolving `latest` exists to avoid everywhere else.
