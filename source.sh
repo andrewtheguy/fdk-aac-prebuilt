@@ -46,5 +46,7 @@ ensure_source() {
   }
 
   rm -rf "$src"
-  tar xzf "build/$tarball" -C build
+  # As the user unpacking it, not as the archive's uid: root in a rootless container keeps the
+  # archive's owner, which on the host is a subuid the next run's cleanup cannot remove.
+  tar xzf "build/$tarball" -C build --no-same-owner
 }
