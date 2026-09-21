@@ -23,8 +23,8 @@ buys, measured, is under **CPU floors**.
 
 `fdk-aac-sys` 0.5 vendors the entire FDK AAC C++ tree inside the crate and compiles about
 170 `.cpp` files with the `cc` crate on **every clean build** — in every CI job, every Docker
-layer, every fresh clone. This repository does that compile once, in a pipeline, and
-publishes the archives; a consumer's build script then finds one and emits two link flags.
+layer, every fresh clone. This repository does that compile once and keeps the archives —
+privately, see below; a consumer's build script then finds one and emits two link flags.
 
 Three things fall out of doing it that way, and the third was a surprise:
 
@@ -48,7 +48,14 @@ fdk-aac = { package = "fdk-aac-prebuilt", git = "https://github.com/andrewtheguy
 ```
 
 (Use a tag that exists — see **Releasing**. The tag pins the *crate*; the archives always come
-from the repository's latest release.)
+from the latest release of the private archive repository.)
+
+**The archives are not public.** Fraunhofer's licence is not OSI-approved and grants no patent
+rights, so this repository publishes the source of the build and no binary of it: the archives
+live in the releases of a private repository, and `build.rs` reads them through
+[`gh`](https://cli.github.com), logged in to an account with access. Without that access,
+build your own — `./build.sh <target>` here, then `FDK_AAC_PREBUILT_DIR=…/dist/<target>` in
+the consumer's environment. See **Where the archive comes from**.
 
 `fdk-aac-prebuilt` sets `[lib] name = "fdk_aac"`, so every `use fdk_aac::enc::…` and
 `fdk_aac::dec::Decoder::new` keeps compiling. No cmake, no C++ compiler, no `FDK_AAC_*`
@@ -99,17 +106,21 @@ Everything else — the error types, their message tables, `EncodeInfo`, `InfoSt
    unsupported target, and the way to build with no network whatsoever.
 2. `crates/fdk-aac-prebuilt-sys/prebuilt/<target>/` — what `./build.sh` + `./sync-prebuilt.sh`
    leave behind locally. Gitignored.
-3. the repository's **latest** GitHub release, downloaded into
-   `$CARGO_HOME/fdk-aac-prebuilt/<release tag>/` — one directory per release.
+3. the **latest** release of the private archive repository (`PREBUILT_REPO` in
+   `fdk-aac.env`), downloaded with `gh` into `$CARGO_HOME/fdk-aac-prebuilt/<release tag>/` —
+   one directory per release. It needs `gh` on `PATH` and logged in (or `GH_TOKEN` set) to
+   an account that can read that repository; a release holds the targets its publisher's
+   machine could build, so it may have none for yours.
 
-(3) is what makes a fresh clone of a consuming project build with nothing installed. The
+(3) is what makes a fresh clone of a consuming project build with nothing compiled. The
 cache living under `CARGO_HOME` means the many Docker builds that already cache `~/.cargo`
 get it for free. It is keyed by the release **tag** and not by the fdk-aac version, because
 `latest` moves: two releases of the same fdk-aac carry different archives, so a directory
 named after the version alone would answer for whichever release this machine downloaded
 first, forever — and the symptom is a feature quietly missing rather than a failure. Asking
-which release `latest` is costs one redirect with no body; where it cannot be asked at all
-(`CARGO_NET_OFFLINE`, or a network that does not answer) the newest cached release is used
+which release `latest` is costs one small request; where it cannot be asked at all
+(`CARGO_NET_OFFLINE`, no `gh`, no access, or a network that does not answer) the newest cached
+release is used
 and the provenance line says it was not revalidated. To confirm which one was used:
 
 ```sh
@@ -337,19 +348,21 @@ shipped the wrong archive.
 
 ## Releasing
 
-`.github/workflows/release.yml`, run by hand. It calls `build.yml` rather than repeating it,
-so the archives that get published are the ones that passed the same tests. Draft first,
-publish last — **a draft release does not create the git tag**, so six builds, their tests,
-the e2e binaries, the cross-target digest comparison, packaging and upload all happen while
-the tag still does not exist. A failed release leaves a deletable draft rather than a tag
-pointing at archives nobody should link.
+`./publish-private.sh`, run by hand on the operator's own machine, from a commit that is
+pushed. It builds every target that machine can (`linux-x86_64` and `linux-x86_64-v3` on an
+x86_64 Linux host), puts each through the gate `build.yml` applies — `build.sh`'s own
+verification, the workspace's tests, the e2e binary and `check-static.sh` — and uploads the
+archives and their `SHA256SUMS` to a release of the private archive repository. Draft first,
+publish last, so a failed upload leaves a deletable draft rather than a `latest` with half
+its files.
 
-The tag is computed, never typed: `v<version>-<YYYYMMDDHHMMSS>-<short sha>`.
+Not a workflow, for two reasons. A public repository's workflow artifacts can be downloaded
+by anyone with a GitHub account, which is a way of publishing the binary; and a private
+repository's runners are billed by the minute.
 
-**Bootstrap order for a fresh repository:** two CI jobs (`leaks` and `consumer-fetch`) resolve
-their archive by downloading it, so they cannot pass before the first release exists. Run
-`build.yml` by hand to check the six targets compile, then `release.yml`, and CI is green
-from that commit onwards.
+The tag is computed, never typed: `v<version>-<YYYYMMDDHHMMSS>-<short sha>`. It is created
+twice — on the archive repository, as the release, and here, as a plain git tag with no
+release, which is what a consumer's manifest names.
 
 ## Something to listen to
 
