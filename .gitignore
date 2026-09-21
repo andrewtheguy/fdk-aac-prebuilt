@@ -29,3 +29,7 @@ e2e-out/
 # regenerable WAV, and regenerating it is the point — a committed copy would be one machine's
 # rendering of signals that are meant to be produced fresh by whoever is listening.
 audio/
+
+# Scratch: the devtools Windows driver stages its upload here, and publish-private.sh keeps
+# each builder's log here.
+tmp/

@@ -20,6 +20,29 @@ cd "$here"
 
 image=fdk-aac-prebuilt-test
 
+# podman where the machine has it, docker otherwise. podman first because a machine whose
+# containers are rootless Quadlets often has a `docker` too, and it is podman's shim.
+# `FDK_AAC_CONTAINER_ENGINE` names one outright.
+engine=("${FDK_AAC_CONTAINER_ENGINE:-}")
+if [ -z "${engine[0]}" ]; then
+  if command -v podman >/dev/null 2>&1; then engine=(podman)
+  elif command -v docker >/dev/null 2>&1; then engine=(docker)
+  else echo "neither podman nor docker is on PATH" >&2; exit 1
+  fi
+fi
+
+# A rootless podman reached over ssh has no login session, so no user bus — and its default
+# cgroup manager asks systemd for a scope over exactly that bus. `podman run` notices and
+# falls back by itself; `podman build` hands the request to crun, which fails every RUN step
+# with "Interactive authentication required". Saying cgroupfs up front covers both.
+if [ "${engine[0]}" = podman ] && [ ! -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus" ]; then
+  engine+=(--cgroup-manager=cgroupfs)
+fi
+
+# The host's network, for the build and the run alike. All either needs is a way out — apt,
+# and the fdk-aac tarball — and a rootless podman without `pasta` installed has no other.
+network=(--network host)
+
 # target : docker platform.
 targets=(
   "linux-aarch64:linux/arm64"
@@ -45,10 +68,11 @@ fi
 # which fails with a confusing authentication error.
 build_image() {
   local platform="$1" tag="$image:${1##*/}"
-  docker image inspect "$tag" >/dev/null 2>&1 && return 0
+  "${engine[@]}" image inspect "$tag" >/dev/null 2>&1 && return 0
   echo ">> building the test image for $platform"
-  docker build -q --platform "$platform" -t "$tag" -f - . <<'DOCKERFILE' >/dev/null
-FROM rust:1-bookworm
+  # The registry spelled out: podman resolves no short names unless it is configured to.
+  "${engine[@]}" build -q "${network[@]}" --platform "$platform" -t "$tag" -f - . <<'DOCKERFILE' >/dev/null
+FROM docker.io/library/rust:1-bookworm
 RUN apt-get update \
  && apt-get install -y --no-install-recommends cmake binutils valgrind \
  && rm -rf /var/lib/apt/lists/*
@@ -80,7 +104,7 @@ for entry in "${targets[@]}"; do
   # and cargo would rebuild the world on every switch — or worse, try to reuse them.
   # `build/` and `dist/` are already per-target, so those are safe to share, and sharing
   # them means the fdk-aac tarball is downloaded once for all of this.
-  if docker run --rm --platform "$platform" \
+  if "${engine[@]}" run --rm "${network[@]}" --platform "$platform" \
       -v "$here:/work" \
       -e CARGO_TARGET_DIR="/work/target/docker-${platform##*/}" \
       "$image:${platform##*/}" bash -euo pipefail -c "

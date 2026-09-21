@@ -109,8 +109,7 @@ Everything else — the error types, their message tables, `EncodeInfo`, `InfoSt
 3. the **latest** release of the private archive repository (`PREBUILT_REPO` in
    `fdk-aac.env`), downloaded with `gh` into `$CARGO_HOME/fdk-aac-prebuilt/<release tag>/` —
    one directory per release. It needs `gh` on `PATH` and logged in (or `GH_TOKEN` set) to
-   an account that can read that repository; a release holds the targets its publisher's
-   machine could build, so it may have none for yours.
+   an account that can read that repository.
 
 (3) is what makes a fresh clone of a consuming project build with nothing compiled. The
 cache living under `CARGO_HOME` means the many Docker builds that already cache `~/.cargo`
@@ -348,13 +347,27 @@ shipped the wrong archive.
 
 ## Releasing
 
-`./publish-private.sh`, run by hand on the operator's own machine, from a commit that is
-pushed. It builds every target that machine can (`linux-x86_64` and `linux-x86_64-v3` on an
-x86_64 Linux host), puts each through the gate `build.yml` applies — `build.sh`'s own
-verification, the workspace's tests, the e2e binary and `check-static.sh` — and uploads the
-archives and their `SHA256SUMS` to a release of the private archive repository. Draft first,
-publish last, so a failed upload leaves a deletable draft rather than a `latest` with half
-its files.
+`./publish-private.sh`, run by hand on a Linux x86_64 machine, from a commit that is pushed.
+It builds all six targets on machines of the operator's own, four at once, each passing the
+gate `build.yml` applies — `build.sh`'s own verification, the workspace's tests, the e2e
+binary and `check-static.sh` — on the machine that built it:
+
+| builder | targets | how |
+|---|---|---|
+| the machine running it | `linux-x86_64`, `linux-x86_64-v3` | in a container, `test-docker.sh` |
+| `$FDK_AAC_PREBUILT_LINUX_AARCH64_HOST` | `linux-aarch64` | in a container, `test-docker.sh` |
+| `$FDK_AAC_PREBUILT_MACOS_HOST` (default `macvm`) | `macos-arm64` | natively |
+| the Windows CI box | `windows-x86_64-msvc`, `windows-x86_64-msvc-v3` | MSVC, `ci/windows/ci.ps1` |
+
+The sibling [`devtools`](https://github.com/andrewtheguy/devtools) checkout does the
+travelling: its remote drivers copy the tree to a machine, run this repository's
+`ci/unix/ci.sh` or `ci/windows/ci.ps1` there, and fetch back the `dist/<target>` that leaves
+behind. What travels is `git archive HEAD`, so nothing uncommitted or ignored can reach an
+archive. The Linux builders need nothing installed but docker or podman, which is what lets an
+aarch64 server that is nobody's build box make the ARM archive. Then the archives and their
+`SHA256SUMS` go to a release of the private archive repository — draft first, publish last,
+so a failed upload leaves a deletable draft rather than a `latest` with half its files. All
+six or no release.
 
 Not a workflow, for two reasons. A public repository's workflow artifacts can be downloaded
 by anyone with a GitHub account, which is a way of publishing the binary; and a private

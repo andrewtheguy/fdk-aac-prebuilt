@@ -35,7 +35,7 @@ jobs:
         # `-x` so that `. ./fdk-aac.env` and `. ./source.sh` are followed rather than
         # reported as unresolvable.
         run: |
-          shellcheck -x build.sh sync-prebuilt.sh publish-private.sh test-docker.sh check-static.sh \
+          shellcheck -x build.sh sync-prebuilt.sh publish-private.sh test-docker.sh check-static.sh ci/unix/ci.sh ci/unix/remote.sh \
                         crates/fdk-aac-prebuilt-sys/gen-bindings.sh \
                         crates/fdk-aac-prebuilt-sys/gen-version.sh
       # The comparison script decides whether a release happens, so a syntax error in it must
@@ -56,7 +56,7 @@ jobs:
       - name: Parse every script with the bash a stock Mac ships
         run: |
           /bin/bash --version | head -1
-          /bin/bash -n build.sh source.sh sync-prebuilt.sh publish-private.sh test-docker.sh check-static.sh \
+          /bin/bash -n build.sh source.sh sync-prebuilt.sh publish-private.sh test-docker.sh check-static.sh ci/unix/ci.sh ci/unix/remote.sh \
                        crates/fdk-aac-prebuilt-sys/gen-bindings.sh \
                        crates/fdk-aac-prebuilt-sys/gen-version.sh
           echo "every script parses under bash $(/bin/bash -c 'echo $BASH_VERSION')"
