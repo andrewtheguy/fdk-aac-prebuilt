@@ -109,8 +109,7 @@ case "${1:-}" in
     # Takes whatever the latest release holds, which is the same thing build.rs would fetch
     # — including the SHA256SUMS check, because a download verified in one half of this
     # repository and not the other is a difference someone would eventually trip over.
-    # Through `gh`, as build.rs does, because the archive repository is private. A release
-    # holds the targets its publisher's machine could build, which need not be all of them.
+    # Through `gh`, as build.rs does, because the archive repository is private.
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
 
@@ -119,7 +118,7 @@ case "${1:-}" in
 
     for target in "${targets[@]}"; do
       asset="fdk-aac-${FDK_AAC_VERSION}-${target}.tar.gz"
-      [ -f "$tmp/$asset" ] || { echo ">> the latest release has no $asset"; continue; }
+      [ -f "$tmp/$asset" ] || { echo "the latest release has no $asset" >&2; exit 1; }
       echo ">> $asset"
 
       # `./` tolerated on the name for the same reason build.rs tolerates it: how the

@@ -426,10 +426,9 @@ fn fetch(repo: &str, name: &str, version: &str, tag: &str, cached: &Path) -> Pat
         .success();
     if !downloaded || !tarball.is_file() || !sums.is_file() {
         panic!(
-            "cannot download {asset} and SHA256SUMS from {repo} {tag}. A release holds the \
-             targets its publisher's machine could build, so this one may have none for \
-             {name}: run ./build.sh {name} in a checkout of this repository and set \
-             FDK_AAC_PREBUILT_DIR to its dist/{name}."
+            "cannot download {asset} and SHA256SUMS from {repo} {tag}. Try again, or run \
+             ./build.sh {name} in a checkout of this repository and set FDK_AAC_PREBUILT_DIR \
+             to its dist/{name}."
         );
     }
     verify_download(&sums, &asset, &tarball, tag);
