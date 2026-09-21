@@ -231,8 +231,8 @@ fn main() -> ExitCode {
 /// The archive must be the fdk-aac these crates were generated against.
 ///
 /// The same claim `tests/prebuilt.rs` makes, repeated here because this binary is the thing
-/// that runs on all four targets and, in the `consumer-fetch` job, against the *released*
-/// archive rather than whatever `prebuilt/` happens to hold locally.
+/// that runs on all four targets, and in a consumer's place against a *released* archive
+/// rather than whatever `prebuilt/` happens to hold locally.
 fn check_library_identity(report: &mut Report) {
     println!("\nlibrary identity");
 

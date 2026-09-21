@@ -5,7 +5,7 @@
 #   ./sync-prebuilt.sh              copy dist/* into the crate's prebuilt/ cache
 #   ./sync-prebuilt.sh --headers    refresh the committed headers and both generated files
 #   ./sync-prebuilt.sh --check      verify the committed headers, bindings and version consts
-#   ./sync-prebuilt.sh --fetch      download the latest release's archives into prebuilt/
+#   ./sync-prebuilt.sh --fetch      download the latest private release's archives into prebuilt/
 #
 # Neither `prebuilt/` nor `dist/` is committed — see .gitignore. Three things *are*:
 #
@@ -18,9 +18,9 @@
 # is where the headers come from, and the headers are where the bindings come from. It holds
 # only if every link is checked, so `--check` checks all of them and CI runs it.
 #
-# There is nothing here to pin a release with. build.rs fetches from the repository's latest
-# release, so publishing one is the whole of releasing — no follow-up commit restating what
-# GitHub already serves.
+# There is nothing here to pin a release with. build.rs fetches from the latest release of
+# the private archive repository, so publishing one is the whole of releasing — no follow-up
+# commit restating what GitHub already serves.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -109,17 +109,18 @@ case "${1:-}" in
     # Takes whatever the latest release holds, which is the same thing build.rs would fetch
     # — including the SHA256SUMS check, because a download verified in one half of this
     # repository and not the other is a difference someone would eventually trip over.
-    base="https://github.com/$PREBUILT_REPO/releases/latest/download"
+    # Through `gh`, as build.rs does, because the archive repository is private. A release
+    # holds the targets its publisher's machine could build, which need not be all of them.
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
 
-    echo ">> SHA256SUMS"
-    curl -sSL --fail --max-time 300 -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"
+    gh release download --repo "$PREBUILT_REPO" --dir "$tmp" \
+      --pattern SHA256SUMS --pattern "fdk-aac-${FDK_AAC_VERSION}-*.tar.gz"
 
     for target in "${targets[@]}"; do
       asset="fdk-aac-${FDK_AAC_VERSION}-${target}.tar.gz"
+      [ -f "$tmp/$asset" ] || { echo ">> the latest release has no $asset"; continue; }
       echo ">> $asset"
-      curl -sSL --fail --max-time 300 -o "$tmp/$asset" "$base/$asset"
 
       # `./` tolerated on the name for the same reason build.rs tolerates it: how the
       # release job spelled its glob should not be able to break this.

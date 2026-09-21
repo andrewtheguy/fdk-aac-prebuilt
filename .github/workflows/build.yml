@@ -1,18 +1,16 @@
 name: Build fdk-aac
 
-# Build every archive and test it. This workflow never publishes — releasing is release.yml,
-# which calls this one and then does the publishing part. Two triggers instead of one, so
-# that "does it build and pass" can be asked at any time without anybody being committed to
-# a release by asking.
+# Build every archive and test it. This workflow never publishes, and nothing here does:
+# releasing is `./publish-private.sh`, run on the operator's own machine, because the
+# archives are not public (fdk-aac.env). What this answers is "does it build and pass", on
+# the targets that machine does not have.
 #
 # `workflow_dispatch` is the test loop, and Windows is why it matters: it is the one target
 # that cannot be built or tested anywhere else here — Docker covers Linux
 # (`./test-docker.sh`) and a Mac covers itself — so `targets: windows` is how the MSVC
 # archive gets exercised at all.
 #
-# `workflow_call` is release.yml. A failure anywhere in here — a build, a test, the e2e
-# binary, `check-static.sh`, the cross-target digest comparison — fails the caller's job and
-# the release never happens.
+# `workflow_call` is ci.yml, which runs the x86_64 group on every push.
 on:
   workflow_dispatch:
     inputs:
@@ -28,8 +26,7 @@ on:
         type: string
         default: all
 
-# Read-only. The token that can create a release belongs to the job that creates one, and
-# that job is in the other file.
+# Read-only: nothing here writes to the repository.
 permissions:
   contents: read
 
@@ -134,6 +131,10 @@ jobs:
           name: fdk-aac-${{ matrix.target }}
           path: dist/${{ matrix.target }}
           if-no-files-found: error
+          # As short as it goes. The jobs below need it for the length of this run, and
+          # anyone with a GitHub account can download a public repository's artifacts —
+          # which is a way of publishing the binary this repository does not publish.
+          retention-days: 1
 
       # What the e2e binary measured, uploaded separately so the comparison job can collect
       # every target's without unpacking four archive trees: the bitstream digests, the
