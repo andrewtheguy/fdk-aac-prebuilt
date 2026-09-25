@@ -118,7 +118,7 @@ for entry in "${targets[@]}"; do
         # dependency the MANIFEST says it should not need.
         cargo build --offline --release --workspace $cargo_features
         ./target/docker-${platform##*/}/release/fdk-aac-e2e | tail -4
-        ./check-static.sh ./target/docker-${platform##*/}/release/fdk-aac-e2e
+        ./check-static.sh ./target/docker-${platform##*/}/release/fdk-aac-e2e $target
 
         # Leak checking, exactly rather than by watching RSS. valgrind interposes on malloc,
         # so it sees the allocations fdk-aac makes in C through libSYS — which is the whole

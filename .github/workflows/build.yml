@@ -120,7 +120,7 @@ jobs:
           bin=target/release/fdk-aac-e2e
           [ -f "$bin" ] || bin="$bin.exe"
           "$bin"
-          ./check-static.sh "$bin"
+          ./check-static.sh "$bin" ${{ matrix.target }}
 
       - name: Show what was built
         shell: bash

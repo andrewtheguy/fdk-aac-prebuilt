@@ -48,13 +48,13 @@ Invoke-Step 'sync-prebuilt.sh' { Invoke-Bash './sync-prebuilt.sh' }
 # One flavour at a time: which archive a build links is a cargo feature, so each is tested
 # by the build that links it. cargo from PowerShell, not from the MSYS shell: there
 # `/usr/bin/link` (coreutils) shadows MSVC's link.exe and every build script fails to link.
-foreach ($flavour in @(@{ Name = 'baseline'; Args = @() }, @{ Name = 'x86-64-v3'; Args = @('--features', 'fdk-aac-e2e/x86-64-v3') })) {
+foreach ($flavour in @(@{ Name = 'baseline'; Target = 'windows-x86_64-msvc'; Args = @() }, @{ Name = 'x86-64-v3'; Target = 'windows-x86_64-msvc-v3'; Args = @('--features', 'fdk-aac-e2e/x86-64-v3') })) {
     $extra = $flavour.Args
     Invoke-Step "cargo test ($($flavour.Name))" { & cargo test --offline --workspace @extra }
     Invoke-Step "cargo build ($($flavour.Name))" { & cargo build --offline --release --workspace @extra }
     Invoke-Step "end to end ($($flavour.Name))" {
         & "$target\release\fdk-aac-e2e.exe"
-        if ($LASTEXITCODE -eq 0) { Invoke-Bash ('./check-static.sh "$(cygpath -u ''' + "$target\release\fdk-aac-e2e.exe" + ''')"') }
+        if ($LASTEXITCODE -eq 0) { Invoke-Bash ('./check-static.sh "$(cygpath -u ''' + "$target\release\fdk-aac-e2e.exe" + ''')" ' + $flavour.Target) }
     }
 }
 

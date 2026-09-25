@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Assert that a binary carries fdk-aac inside it rather than expecting to find one.
 #
-#   ./check-static.sh target/release/fdk-aac-e2e
+#   ./check-static.sh target/release/fdk-aac-e2e [target]
+#
+# `target` names the archive the binary linked — `linux-x86_64-v3` for a build with the
+# x86-64-v3 feature, say — and defaults to this machine's baseline target. Its MANIFEST, and no
+# other, is what the C++ runtime check below reads.
 #
 # Three questions, and they fail in different directions:
 #
@@ -27,8 +31,19 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-bin="${1:?usage: ./check-static.sh <binary>}"
+bin="${1:?usage: ./check-static.sh <binary> [target]}"
 [ -f "$bin" ] || { echo "no such file: $bin" >&2; exit 1; }
+
+# The archive the binary linked: named by the caller, or else this machine's baseline target.
+# Only the caller can know about the -v3 flavours, which a cargo feature selects.
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) host_target=macos-arm64 ;;
+  Linux-x86_64) host_target=linux-x86_64 ;;
+  Linux-aarch64 | Linux-arm64) host_target=linux-aarch64 ;;
+  MINGW*-x86_64 | MSYS*-x86_64 | CYGWIN*-x86_64) host_target=windows-x86_64-msvc ;;
+  *) host_target=unknown ;;
+esac
+target="${2:-$host_target}"
 
 # shellcheck source=fdk-aac.env
 . "$here/fdk-aac.env"
@@ -69,11 +84,17 @@ fi
 
 # What did build.sh measure for this target? Looked up rather than assumed, and skipped
 # rather than guessed when there is no MANIFEST to read — a check that invents its own
-# expectation is worse than one that says it did not run.
+# expectation is worse than one that says it did not run. **This** target's, by name: taking
+# the last MANIFEST the globs found reported another target's measurement — the linux-x86_64
+# container run read windows-x86_64-msvc's from a prebuilt/ cache the tree carried (the same bug
+# libvpx-prebuilt fixed).
 manifest=""
-for candidate in "$here"/dist/*/MANIFEST "$here"/crates/fdk-aac-prebuilt-sys/prebuilt/*/MANIFEST; do
-  [ -f "$candidate" ] || continue
-  manifest="$candidate"
+for candidate in "$here/dist/$target/MANIFEST" \
+                 "$here/crates/fdk-aac-prebuilt-sys/prebuilt/$target/MANIFEST"; do
+  if [ -f "$candidate" ]; then
+    manifest="$candidate"
+    break
+  fi
 done
 
 if [ -n "$manifest" ]; then
@@ -91,7 +112,7 @@ if [ -n "$manifest" ]; then
     fi
   fi
 else
-  echo "   note  no MANIFEST found — skipping the C++ runtime check"
+  echo "   note  no $target MANIFEST found — skipping the C++ runtime check"
 fi
 
 exit "$fail"
