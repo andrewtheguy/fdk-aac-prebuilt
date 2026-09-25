@@ -90,7 +90,8 @@ cmake_args+=(-DCMAKE_POLICY_VERSION_MINIMUM=3.5)
 # Two things this does not cover, both stated rather than papered over:
 #   - **MSVC ignores it.** cl.exe has no SOURCE_DATE_EPOCH support and no way to redefine
 #     __DATE__, so `windows-x86_64-msvc` is not reproducible and its archive's hash moves
-#     between builds. The CI job that asserts reproducibility builds linux-x86_64 only.
+#     between builds. check-reproducible.sh, which asserts reproducibility on every release,
+#     builds linux-x86_64 only.
 #   - it says nothing about the .tar.gz around the archive, which gzip stamps with an mtime
 #     of its own. That is why `sha256(library)` in the MANIFEST is the checksum worth
 #     comparing between releases, and the tarball's is only good for catching a bad download.

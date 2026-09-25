@@ -120,21 +120,16 @@ jobs:
           bin=target/release/fdk-aac-e2e
           [ -f "$bin" ] || bin="$bin.exe"
           "$bin"
-          ./check-static.sh "$bin"
+          ./check-static.sh "$bin" ${{ matrix.target }}
 
       - name: Show what was built
         shell: bash
         run: cat dist/${{ matrix.target }}/MANIFEST
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: fdk-aac-${{ matrix.target }}
-          path: dist/${{ matrix.target }}
-          if-no-files-found: error
-          # As short as it goes. The jobs below need it for the length of this run, and
-          # anyone with a GitHub account can download a public repository's artifacts —
-          # which is a way of publishing the binary this repository does not publish.
-          retention-days: 1
+      # And no upload of the archive, not even for a day: anyone with a GitHub account can
+      # download a public repository's artifacts, which is a way of publishing the binary this
+      # repository does not publish. Nothing downstream needs it — the compare job reads the
+      # e2e outputs below, and the reproducibility check runs locally (check-reproducible.sh).
 
       # What the e2e binary measured, uploaded separately so the comparison job can collect
       # every target's without unpacking four archive trees: the bitstream digests, the
