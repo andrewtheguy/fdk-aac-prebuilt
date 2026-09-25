@@ -30,8 +30,8 @@ Three things fall out of doing it that way, and the third was a surprise:
 
 - no C++ compiler, no cmake, no autotools in any consuming project;
 - the archives are checked — compiled to a stated CPU floor and, on x86_64, disassembled to
-  prove no instruction above it got in; reproducible across runners (on the toolchains that
-  can be, see below); and byte-identical in what they *encode* across targets of the same
+  prove no instruction above it got in; reproducible across independent builds (on the
+  toolchains that can be, see below); and byte-identical in what they *encode* across targets of the same
   architecture (see **How far the targets agree** below);
 - **no C++ runtime dependency either.** `build.sh` inspects each archive's undefined symbols
   and finds none from the C++ ABI — fdk-aac is C written in `.cpp` files, and cmake builds it
@@ -213,15 +213,21 @@ the cross-target comparison below would stop meaning anything).
 
 ### Reproducibility
 
-Two runners building the same commit produce a byte-identical `libfdk-aac.a`, and CI asserts
-it. That takes one deliberate step: fdk-aac compiles `__DATE__` and `__TIME__` into eight of
-its modules — `aacEncGetLibInfo` reports them as `build_date`/`build_time` — and `__TIME__` is
-evaluated per translation unit, so without intervention a single build embeds a spread of
-timestamps across however many seconds the compile took. `build.sh` exports
+Two independent builds of the same commit produce a byte-identical `libfdk-aac.a`, and every
+release asserts it: `check-reproducible.sh`, run by `ci/unix/ci.sh` on Linux x86_64 (and so by
+`publish-private.sh`), rebuilds linux-x86_64 clean, in a fresh container, from a copy of the
+tree at another path, and compares. Locally rather than across two CI runners, because comparing
+across runners means uploading the archive as a workflow artifact, and a public repository's
+artifacts are downloadable by anyone.
+
+Reproducibility takes one deliberate step: fdk-aac compiles `__DATE__` and `__TIME__` into
+eight of its modules — `aacEncGetLibInfo` reports them as `build_date`/`build_time` — and
+`__TIME__` is evaluated per translation unit, so without intervention a single build embeds a
+spread of timestamps across however many seconds the compile took. `build.sh` exports
 `SOURCE_DATE_EPOCH`, which GCC and Clang honour, and the archives report `Jan  1 1980`.
 
 **`windows-x86_64-msvc` is excepted**: cl.exe supports no such variable and offers no way to
-redefine `__DATE__`, so that archive's hash moves between builds. The CI job builds
+redefine `__DATE__`, so that archive's hash moves between builds. The check builds
 `linux-x86_64` only, rather than asserting something untrue about the others.
 
 Note also that the `.tar.gz` around an archive is *not* reproducible — gzip stamps an mtime

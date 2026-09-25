@@ -35,7 +35,7 @@ jobs:
         # `-x` so that `. ./fdk-aac.env` and `. ./source.sh` are followed rather than
         # reported as unresolvable.
         run: |
-          shellcheck -x build.sh sync-prebuilt.sh publish-private.sh test-docker.sh check-static.sh ci/unix/ci.sh ci/unix/remote.sh \
+          shellcheck -x build.sh sync-prebuilt.sh publish-private.sh test-docker.sh check-static.sh check-reproducible.sh ci/unix/ci.sh ci/unix/remote.sh \
                         crates/fdk-aac-prebuilt-sys/gen-bindings.sh \
                         crates/fdk-aac-prebuilt-sys/gen-version.sh
       # The comparison script decides whether a release happens, so a syntax error in it must
@@ -56,7 +56,7 @@ jobs:
       - name: Parse every script with the bash a stock Mac ships
         run: |
           /bin/bash --version | head -1
-          /bin/bash -n build.sh source.sh sync-prebuilt.sh publish-private.sh test-docker.sh check-static.sh ci/unix/ci.sh ci/unix/remote.sh \
+          /bin/bash -n build.sh source.sh sync-prebuilt.sh publish-private.sh test-docker.sh check-static.sh check-reproducible.sh ci/unix/ci.sh ci/unix/remote.sh \
                        crates/fdk-aac-prebuilt-sys/gen-bindings.sh \
                        crates/fdk-aac-prebuilt-sys/gen-version.sh
           echo "every script parses under bash $(/bin/bash -c 'echo $BASH_VERSION')"
@@ -117,57 +117,11 @@ jobs:
     with:
       targets: x86_64
 
-  # Is the library reproducible? The `archives` job above built one on its own runner; this
-  # builds the same target again, on a different runner, and requires the two
-  # `libfdk-aac.a` files to be **byte-identical**.
-  #
-  # That is the checksum that actually means something. The `.tar.gz` around it is not
-  # reproducible — gzip stamps an mtime into its header — so SHA256SUMS can only ever say
-  # "these are the bytes that were published", which is what a download needs and no more.
-  # This says the stronger thing: the same source and the same flags produce the same
-  # library, so a change in it is a change somebody made.
-  #
-  # Two independent runners rather than two builds on one, because a compiler that embeds a
-  # path, a timestamp or a hostname would pass the second and fail this.
-  #
-  # It only holds because build.sh exports `SOURCE_DATE_EPOCH`: fdk-aac compiles `__DATE__`
-  # and `__TIME__` into eight of its modules, evaluated per translation unit, so without that
-  # a single build embeds a spread of timestamps and no two builds agree. **linux-x86_64
-  # only** — cl.exe honours no such variable, so the MSVC archive is not reproducible and
-  # this job would be asserting something untrue about it.
-  reproducible:
-    needs: archives
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Rebuild linux-x86_64
-        run: ./build.sh linux-x86_64
-
-      - name: Download the archive the other runner built
-        uses: actions/download-artifact@v4
-        with:
-          name: fdk-aac-linux-x86_64
-          path: theirs
-
-      - name: The two must be byte-identical
-        run: |
-          mine="$(sha256sum dist/linux-x86_64/lib/libfdk-aac.a | awk '{print $1}')"
-          theirs="$(sha256sum theirs/lib/libfdk-aac.a | awk '{print $1}')"
-          echo "  this runner: $mine"
-          echo "  the other:   $theirs"
-          # Also against what the other runner recorded for itself, which catches a MANIFEST
-          # that disagrees with the file shipped beside it.
-          recorded="$(awk '$1=="sha256(library)"{print $2}' theirs/MANIFEST)"
-          [ "$recorded" = "$theirs" ] || {
-            echo "::error::MANIFEST says $recorded but the archive hashes to $theirs"
-            exit 1
-          }
-          [ "$mine" = "$theirs" ] || {
-            echo "::error::the same commit produced two different libraries on two runners"
-            exit 1
-          }
-          echo "  reproducible: same source, same flags, same library"
+  # No reproducibility job here. It compared this run's linux-x86_64 archive with a second
+  # runner's, which needed the archive uploaded as an artifact — and a public repository's
+  # artifacts can be downloaded by anyone with a GitHub account, which is publishing the binary
+  # this repository does not publish. check-reproducible.sh makes the same comparison locally
+  # (a fresh container, another path, later), and publish-private.sh runs it on every release.
 
   # Leak checking on the one platform that has `leaks` — macOS. The other two legs live
   # elsewhere: valgrind runs under `test-docker.sh` on Linux, and the e2e binary's own RSS

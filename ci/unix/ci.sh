@@ -4,7 +4,9 @@
 # `dist/<target>/` behind in the workspace for the publisher to fetch.
 #
 # The gate is build.yml's: build.sh's own verification, the workspace's tests against the
-# archive, and the e2e binary run and checked for what it links.
+# archive, and the e2e binary run and checked for what it links. On Linux x86_64 it also rebuilds
+# linux-x86_64 independently and requires the same library (check-reproducible.sh) — a check
+# that lives here rather than on GitHub, which would have to upload the archive to compare it.
 #
 #   macOS arm64    macos-arm64, natively.
 #   Linux x86_64   linux-x86_64 and linux-x86_64-v3, in a container (test-docker.sh).
@@ -30,6 +32,7 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)
     ./test-docker.sh linux-x86_64
     ./test-docker.sh linux-x86_64-v3
+    ./check-reproducible.sh
     ;;
   Linux-aarch64 | Linux-arm64)
     ./test-docker.sh linux-aarch64
